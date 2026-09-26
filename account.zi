@@ -1,0 +1,95 @@
+// Account deletion uses a fresh challenge and account signature. No private
+// key or exported backup is sent to Daochi.
+#import "client"
+#import "auth"
+#import "url"
+#import "wire"
+#import "net_http"
+#import "byte_text_linux"
+
+#scope_export
+#program_export
+BuildDeleteBody :: (account_id: string, public_key: string,
+    output: []u8) -> bool {
+    if output.count == 0 { return false }
+    output[0] = cast(u8)0
+    if !Hex64(account_id) || public_key.count == 0 { return false }
+    cursor: s64 = 0
+    if !WriteText(output, *cursor, "{\"user_id_hash\":") ||
+        !AppendJsonQuoted(output, *cursor, account_id) ||
+        !WriteText(output, *cursor, ",\"public_key\":") ||
+        !AppendJsonQuoted(output, *cursor, public_key) ||
+        !WriteByte(output, *cursor, cast(u8)125) {
+        output[0] = cast(u8)0
+        return false
+    }
+    return true
+}
+
+#scope_export
+#program_export
+DeleteAccount :: (client: Client) -> AuthResult {
+    challenge: [4096]u8
+    challenged := FetchChallengeJson(client, challenge[:])
+    if challenged != cast(AuthResult)AuthResult.AUTH_OK {
+        return challenged
+    }
+    nonce: [65]u8
+    if !FieldText(TextFromCString(*challenge[0]), "nonce", nonce[:]) ||
+        !Hex64(TextFromCString(*nonce[0])) {
+        return cast(AuthResult)AuthResult.AUTH_CHALLENGE_FAILED
+    }
+    body: [4096]u8
+    if !BuildDeleteBody(client.identity.account_id,
+        client.identity.public_key, body[:]) {
+        return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
+    }
+    body_hash: [65]u8
+    if !client.digest(TextFromCString(*body[0]), body_hash[:]) ||
+        !Hex64(TextFromCString(*body_hash[0])) {
+        return cast(AuthResult)AuthResult.AUTH_SIGN_FAILED
+    }
+    message: [256]u8
+    if !BuildDeleteMessageHash(TextFromCString(*body_hash[0]),
+        TextFromCString(*nonce[0]), message[:]) {
+        return cast(AuthResult)AuthResult.AUTH_SIGN_FAILED
+    }
+    signature: [4841]u8
+    if !client.signer(client.identity.signing_context,
+        TextFromCString(*message[0]), signature[:]) ||
+        !HexText(TextFromCString(*signature[0]), 4840) {
+        return cast(AuthResult)AuthResult.AUTH_SIGN_FAILED
+    }
+    server: [512]u8
+    url: [768]u8
+    if !NormalizeUrl(client.server_url, server[:]) ||
+        !JoinUrl(TextFromCString(*server[0]),
+            "/api/v1/account/delete", url[:]) {
+        return cast(AuthResult)AuthResult.AUTH_INVALID_URL
+    }
+    headers: [2]HttpHeader
+    headers[0].name = "X-Daochi-User"
+    headers[0].value = client.identity.account_id
+    headers[1].name = "X-Daochi-Signature"
+    headers[1].value = TextFromCString(*signature[0])
+    request: HttpRequest
+    request.method = "POST"
+    request.url = TextFromCString(*url[0])
+    request.content_type = "application/json"
+    request.accept = "application/json"
+    request.body = TextFromCString(*body[0])
+    request.headers = headers[:]
+    response: [4096]u8
+    status: s32 = 0
+    if !client.send(client.transport_context, request,
+        response[:], *status) {
+        return cast(AuthResult)AuthResult.AUTH_REQUEST_FAILED
+    }
+    if status == 401 || status == 403 {
+        return cast(AuthResult)AuthResult.AUTH_FAILED
+    }
+    if status < 200 || status >= 300 {
+        return cast(AuthResult)AuthResult.AUTH_REQUEST_FAILED
+    }
+    return cast(AuthResult)AuthResult.AUTH_OK
+}

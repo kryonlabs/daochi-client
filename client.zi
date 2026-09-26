@@ -21,11 +21,9 @@ Client :: struct {
 
 #scope_export
 #program_export
-Login :: (client: Client, session: *Session) -> AuthResult {
-    if session == null {
-        return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
-    }
-    session.* = Session.{}
+FetchChallengeJson :: (client: Client, output: []u8) -> AuthResult {
+    if output.count == 0 { return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED }
+    output[0] = cast(u8)0
     server: [512]u8
     if !NormalizeUrl(client.server_url, server[:]) {
         return cast(AuthResult)AuthResult.AUTH_INVALID_URL
@@ -44,14 +42,28 @@ Login :: (client: Client, session: *Session) -> AuthResult {
     request.method = "GET"
     request.url = TextFromCString(*url[0])
     request.accept = "application/json"
-    challenge: [4096]u8
     status: s32 = 0
     if !client.send(client.transport_context, request,
-        challenge[:], *status) || status != 200 {
+        output, *status) || status != 200 {
         if status == 401 {
             return cast(AuthResult)AuthResult.AUTH_FAILED
         }
         return cast(AuthResult)AuthResult.AUTH_CHALLENGE_FAILED
+    }
+    return cast(AuthResult)AuthResult.AUTH_OK
+}
+
+#scope_export
+#program_export
+Login :: (client: Client, session: *Session) -> AuthResult {
+    if session == null {
+        return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
+    }
+    session.* = Session.{}
+    challenge: [4096]u8
+    challenged := FetchChallengeJson(client, challenge[:])
+    if challenged != cast(AuthResult)AuthResult.AUTH_OK {
+        return challenged
     }
 
     body: [4096]u8
@@ -62,11 +74,17 @@ Login :: (client: Client, session: *Session) -> AuthResult {
     if prepared != cast(AuthResult)AuthResult.AUTH_OK {
         return prepared
     }
+    server: [512]u8
+    if !NormalizeUrl(client.server_url, server[:]) {
+        return cast(AuthResult)AuthResult.AUTH_INVALID_URL
+    }
+    url: [768]u8
     if !JoinUrl(TextFromCString(*server[0]),
         "/api/v1/sync/login", url[:]) {
         return cast(AuthResult)AuthResult.AUTH_INVALID_URL
     }
 
+    request: HttpRequest
     headers: [2]HttpHeader
     headers[0].name = "X-Daochi-User"
     headers[0].value = client.identity.account_id
@@ -74,11 +92,12 @@ Login :: (client: Client, session: *Session) -> AuthResult {
     headers[1].value = TextFromCString(*signature[0])
     request.method = "POST"
     request.url = TextFromCString(*url[0])
+    request.accept = "application/json"
     request.content_type = "application/json"
     request.body = TextFromCString(*body[0])
     request.headers = headers[:]
     response: [8192]u8
-    status = 0
+    status: s32 = 0
     if !client.send(client.transport_context, request,
         response[:], *status) {
         return cast(AuthResult)AuthResult.AUTH_REQUEST_FAILED

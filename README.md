@@ -13,6 +13,8 @@ The portable modules currently provide:
   (`transaction.zi`);
 - signed device registration and protocol v6 sync requests (`sync.zi`).
 - alias and friend requests, actions, lists, and stats (`social.zi`).
+- challenge signed account deletion without transmitting a key backup
+  (`account.zi`).
 
 The application supplies the account signer and body digest. A host supplies
 bounded HTTP requests through `SendRequest`; the host must NUL terminate every
