@@ -4,7 +4,7 @@
 #import "url"
 #import "wire"
 #import "net_http"
-#import "byte_text_linux"
+#import "text_buffer"
 
 SendRequest :: #type (context: *void, request: HttpRequest,
     output: []u8, status: *s32) -> bool #c_call;
@@ -33,14 +33,14 @@ FetchChallengeJson :: (client: Client, output: []u8) -> AuthResult {
         return cast(AuthResult)AuthResult.AUTH_NO_ACCOUNT
     }
     url: [768]u8
-    if !JoinUrl(TextFromCString(*server[0]),
-        TextFromCString(*path[0]), url[:]) {
+    if !JoinUrl(TextUntilNul(server[:]),
+        TextUntilNul(path[:]), url[:]) {
         return cast(AuthResult)AuthResult.AUTH_INVALID_URL
     }
 
     request: HttpRequest
     request.method = "GET"
-    request.url = TextFromCString(*url[0])
+    request.url = TextUntilNul(url[:])
     request.accept = "application/json"
     status: s32 = 0
     if !client.send(client.transport_context, request,
@@ -69,7 +69,7 @@ Login :: (client: Client, session: *Session) -> AuthResult {
     body: [4096]u8
     signature: [4841]u8
     prepared := PrepareLogin(client.identity,
-        TextFromCString(*challenge[0]), client.digest, client.signer,
+        TextUntilNul(challenge[:]), client.digest, client.signer,
         body[:], signature[:])
     if prepared != cast(AuthResult)AuthResult.AUTH_OK {
         return prepared
@@ -79,7 +79,7 @@ Login :: (client: Client, session: *Session) -> AuthResult {
         return cast(AuthResult)AuthResult.AUTH_INVALID_URL
     }
     url: [768]u8
-    if !JoinUrl(TextFromCString(*server[0]),
+    if !JoinUrl(TextUntilNul(server[:]),
         "/api/v1/sync/login", url[:]) {
         return cast(AuthResult)AuthResult.AUTH_INVALID_URL
     }
@@ -89,12 +89,12 @@ Login :: (client: Client, session: *Session) -> AuthResult {
     headers[0].name = "X-Daochi-User"
     headers[0].value = client.identity.account_id
     headers[1].name = "X-Daochi-Signature"
-    headers[1].value = TextFromCString(*signature[0])
+    headers[1].value = TextUntilNul(signature[:])
     request.method = "POST"
-    request.url = TextFromCString(*url[0])
+    request.url = TextUntilNul(url[:])
     request.accept = "application/json"
     request.content_type = "application/json"
-    request.body = TextFromCString(*body[0])
+    request.body = TextUntilNul(body[:])
     request.headers = headers[:]
     response: [8192]u8
     status: s32 = 0
@@ -102,7 +102,7 @@ Login :: (client: Client, session: *Session) -> AuthResult {
         response[:], *status) {
         return cast(AuthResult)AuthResult.AUTH_REQUEST_FAILED
     }
-    return AcceptLogin(status, TextFromCString(*response[0]), session)
+    return AcceptLogin(status, TextUntilNul(response[:]), session)
 }
 
 MethodValid :: (method: string) -> bool {
@@ -198,7 +198,7 @@ BearerRequestWithHeaders :: (client: Client, session: *Session, now: s64,
         return cast(AuthResult)AuthResult.AUTH_INVALID_URL
     }
     url: [2048]u8
-    if !JoinUrl(TextFromCString(*server[0]), path, url[:]) {
+    if !JoinUrl(TextUntilNul(server[:]), path, url[:]) {
         return cast(AuthResult)AuthResult.AUTH_INVALID_URL
     }
     ready := EnsureSession(client, session, now)
@@ -221,8 +221,8 @@ BearerRequestWithHeaders :: (client: Client, session: *Session, now: s64,
         }
         request: HttpRequest
         request.method = method
-        request.url = TextFromCString(*url[0])
-        request.token = TextFromCString(*session.token[0])
+        request.url = TextUntilNul(url[:])
+        request.token = TextUntilNul(session.token[:])
         request.accept = "application/json"
         request.headers = headers[0:header_count]
         if body.count > 0 {

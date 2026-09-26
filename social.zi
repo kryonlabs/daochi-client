@@ -2,7 +2,7 @@
 #import "client"
 #import "auth"
 #import "wire"
-#import "byte_text_linux"
+#import "text_buffer"
 
 SpaceByte :: (byte: u8) -> bool {
     return byte == cast(u8)32 || byte == cast(u8)9 ||
@@ -89,7 +89,7 @@ BuildFriendRequestBody :: (target: string, output: []u8) -> bool {
     cursor: s64 = 0
     if !WriteText(output, *cursor, "{\"target\":") ||
         !AppendJsonQuoted(output, *cursor,
-            TextFromCString(*normalized[0])) ||
+            TextUntilNul(normalized[:])) ||
         !WriteByte(output, *cursor, cast(u8)125) {
         output[0] = cast(u8)0
         return false
@@ -218,7 +218,7 @@ SendFriendRequest :: (client: Client, session: *Session, now: s64,
         return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
     }
     return BearerRequest(client, session, now, "POST",
-        "/api/v1/friends/requests", TextFromCString(*body[0]),
+        "/api/v1/friends/requests", TextUntilNul(body[:]),
         output, status)
 }
 
@@ -232,7 +232,7 @@ FriendAction :: (client: Client, session: *Session, now: s64,
         return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
     }
     return BearerRequest(client, session, now, "POST",
-        TextFromCString(*path[0]), "{}", output, status)
+        TextUntilNul(path[:]), "{}", output, status)
 }
 
 #scope_export
@@ -244,7 +244,7 @@ RemoveFriend :: (client: Client, session: *Session, now: s64,
         return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
     }
     return BearerRequest(client, session, now, "DELETE",
-        TextFromCString(*path[0]), "", output, status)
+        TextUntilNul(path[:]), "", output, status)
 }
 
 #scope_export
@@ -273,7 +273,7 @@ FriendStats :: (client: Client, session: *Session, now: s64,
         return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
     }
     return BearerRequest(client, session, now, "GET",
-        TextFromCString(*path[0]), "", output, status)
+        TextUntilNul(path[:]), "", output, status)
 }
 
 #scope_export
@@ -285,6 +285,6 @@ RegisterAlias :: (client: Client, session: *Session, now: s64,
         return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
     }
     return BearerRequest(client, session, now, "POST",
-        "/api/v1/account/alias", TextFromCString(*body[0]),
+        "/api/v1/account/alias", TextUntilNul(body[:]),
         output, status)
 }

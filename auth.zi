@@ -2,7 +2,7 @@
 // owns HTTP; neither is stored here.
 #import "wire"
 #import "json_scan"
-#import "byte_text_linux"
+#import "text_buffer"
 
 AuthResult :: enum {
     AUTH_OK :: 0
@@ -115,7 +115,7 @@ PrepareLogin :: (identity: Identity, challenge_json: string,
 
     nonce: [65]u8
     if !FieldText(challenge_json, "nonce", nonce[:]) ||
-        !HexText(TextFromCString(*nonce[0]), 64) {
+        !HexText(TextUntilNul(nonce[:]), 64) {
         return cast(AuthResult)AUTH_CHALLENGE_FAILED
     }
     if !BuildLoginBody(identity.account_id, identity.client_id,
@@ -125,18 +125,18 @@ PrepareLogin :: (identity: Identity, challenge_json: string,
 
     body_hash: [65]u8
     body_hash[0] = cast(u8)0
-    if !digest(TextFromCString(*body[0]), body_hash[:]) ||
-        !HexText(TextFromCString(*body_hash[0]), 64) {
+    if !digest(TextUntilNul(body[:]), body_hash[:]) ||
+        !HexText(TextUntilNul(body_hash[:]), 64) {
         return cast(AuthResult)AUTH_SIGN_FAILED
     }
     message: [256]u8
-    if !BuildLoginMessageHash(TextFromCString(*body_hash[0]),
-        TextFromCString(*nonce[0]), message[:]) {
+    if !BuildLoginMessageHash(TextUntilNul(body_hash[:]),
+        TextUntilNul(nonce[:]), message[:]) {
         return cast(AuthResult)AUTH_SIGN_FAILED
     }
     if !signer(identity.signing_context,
-        TextFromCString(*message[0]), signature) ||
-        !HexText(TextFromCString(*signature[0]), 4840) {
+        TextUntilNul(message[:]), signature) ||
+        !HexText(TextUntilNul(signature[:]), 4840) {
         signature[0] = cast(u8)0
         return cast(AuthResult)AUTH_SIGN_FAILED
     }

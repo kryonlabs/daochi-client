@@ -5,7 +5,7 @@
 #import "url"
 #import "wire"
 #import "net_http"
-#import "byte_text_linux"
+#import "text_buffer"
 
 #scope_export
 #program_export
@@ -35,8 +35,8 @@ DeleteAccount :: (client: Client) -> AuthResult {
         return challenged
     }
     nonce: [65]u8
-    if !FieldText(TextFromCString(*challenge[0]), "nonce", nonce[:]) ||
-        !Hex64(TextFromCString(*nonce[0])) {
+    if !FieldText(TextUntilNul(challenge[:]), "nonce", nonce[:]) ||
+        !Hex64(TextUntilNul(nonce[:])) {
         return cast(AuthResult)AuthResult.AUTH_CHALLENGE_FAILED
     }
     body: [4096]u8
@@ -45,25 +45,25 @@ DeleteAccount :: (client: Client) -> AuthResult {
         return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
     }
     body_hash: [65]u8
-    if !client.digest(TextFromCString(*body[0]), body_hash[:]) ||
-        !Hex64(TextFromCString(*body_hash[0])) {
+    if !client.digest(TextUntilNul(body[:]), body_hash[:]) ||
+        !Hex64(TextUntilNul(body_hash[:])) {
         return cast(AuthResult)AuthResult.AUTH_SIGN_FAILED
     }
     message: [256]u8
-    if !BuildDeleteMessageHash(TextFromCString(*body_hash[0]),
-        TextFromCString(*nonce[0]), message[:]) {
+    if !BuildDeleteMessageHash(TextUntilNul(body_hash[:]),
+        TextUntilNul(nonce[:]), message[:]) {
         return cast(AuthResult)AuthResult.AUTH_SIGN_FAILED
     }
     signature: [4841]u8
     if !client.signer(client.identity.signing_context,
-        TextFromCString(*message[0]), signature[:]) ||
-        !HexText(TextFromCString(*signature[0]), 4840) {
+        TextUntilNul(message[:]), signature[:]) ||
+        !HexText(TextUntilNul(signature[:]), 4840) {
         return cast(AuthResult)AuthResult.AUTH_SIGN_FAILED
     }
     server: [512]u8
     url: [768]u8
     if !NormalizeUrl(client.server_url, server[:]) ||
-        !JoinUrl(TextFromCString(*server[0]),
+        !JoinUrl(TextUntilNul(server[:]),
             "/api/v1/account/delete", url[:]) {
         return cast(AuthResult)AuthResult.AUTH_INVALID_URL
     }
@@ -71,13 +71,13 @@ DeleteAccount :: (client: Client) -> AuthResult {
     headers[0].name = "X-Daochi-User"
     headers[0].value = client.identity.account_id
     headers[1].name = "X-Daochi-Signature"
-    headers[1].value = TextFromCString(*signature[0])
+    headers[1].value = TextUntilNul(signature[:])
     request: HttpRequest
     request.method = "POST"
-    request.url = TextFromCString(*url[0])
+    request.url = TextUntilNul(url[:])
     request.content_type = "application/json"
     request.accept = "application/json"
-    request.body = TextFromCString(*body[0])
+    request.body = TextUntilNul(body[:])
     request.headers = headers[:]
     response: [4096]u8
     status: s32 = 0

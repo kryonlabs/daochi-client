@@ -22,7 +22,7 @@ for test in wire auth url client transaction sync social account events; do
         "$work/generated/transaction.c" "$work/generated/sync.c" \
         "$work/generated/social.c" "$work/generated/account.c" \
         "$work/generated/events.c" \
-        "$work/generated/json_scan.c" "$work/generated/byte_text_linux.c" \
+        "$work/generated/json_scan.c" "$work/generated/text_buffer.c" \
         "$work/generated/text.c" \
         -o "$work/${test}_test"
     env -u DISPLAY -u WAYLAND_DISPLAY "$work/${test}_test"

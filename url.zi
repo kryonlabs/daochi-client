@@ -1,5 +1,5 @@
 // Daochi server URLs use HTTPS except for loopback and private LAN hosts.
-#import "byte_text_linux"
+#import "text_buffer"
 
 StartsWith :: (value: string, prefix: string) -> bool {
     if value.count < prefix.count {
@@ -180,7 +180,7 @@ JoinWebSocketUrl :: (base_url: string, path: string,
     if !JoinUrl(base_url, path, http_url[:]) {
         return false
     }
-    url := TextFromCString(*http_url[0])
+    url := TextUntilNul(http_url[:])
     cursor: s64 = 0
     complete := false
     if StartsWith(url, "https://") {

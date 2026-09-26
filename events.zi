@@ -3,7 +3,7 @@
 #import "client"
 #import "auth"
 #import "url"
-#import "byte_text_linux"
+#import "text_buffer"
 
 EventKind :: enum {
     EVENT_INVALID :: 0
@@ -30,7 +30,7 @@ EventUrl :: (server_url: string, output: []u8) -> bool {
         output[0] = cast(u8)0
         return false
     }
-    return JoinWebSocketUrl(TextFromCString(*normalized[0]),
+    return JoinWebSocketUrl(TextUntilNul(normalized[:]),
         "/api/v1/sync/ws", output)
 }
 
@@ -43,7 +43,7 @@ ParseRemoteEvent :: (json: string, account_id: string) -> RemoteEvent {
     owner: [65]u8
     if !FieldText(json, "type", kind[:]) ||
         !FieldText(json, "user_id_hash", owner[:]) ||
-        !HexText(TextFromCString(*owner[0]), 64) {
+        !HexText(TextUntilNul(owner[:]), 64) {
         return event
     }
     index: s64 = 0
@@ -53,7 +53,7 @@ ParseRemoteEvent :: (json: string, account_id: string) -> RemoteEvent {
     }
     event.server_version = FieldNumber(json, "server_version", -1)
     if event.server_version < 0 { event.server_version = 0; return event }
-    event_type := TextFromCString(*kind[0])
+    event_type := TextUntilNul(kind[:])
     if event_type == "sync_ready" {
         event.kind = cast(EventKind)EVENT_READY
     } else if event_type == "sync_changed" {
@@ -81,10 +81,10 @@ WaitForEvent :: (client: Client, session: *Session, now: s64,
     while attempt < 2 {
         response: [4096]u8
         status: s32 = 0
-        if receive(receive_context, TextFromCString(*url[0]),
-            TextFromCString(*session.token[0]), response[:], *status) &&
+        if receive(receive_context, TextUntilNul(url[:]),
+            TextUntilNul(session.token[:]), response[:], *status) &&
             status == 200 {
-            event.* = ParseRemoteEvent(TextFromCString(*response[0]),
+            event.* = ParseRemoteEvent(TextUntilNul(response[:]),
                 client.identity.account_id)
             if event.kind == cast(EventKind)EVENT_INVALID {
                 return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED

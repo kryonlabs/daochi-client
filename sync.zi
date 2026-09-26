@@ -5,7 +5,7 @@
 #import "transaction"
 #import "wire"
 #import "net_http"
-#import "byte_text_linux"
+#import "text_buffer"
 
 RandomNonce :: #type (context: *void, output: []u8) -> bool #c_call;
 
@@ -49,7 +49,7 @@ CreateNonce :: (random_context: *void, random: RandomNonce,
     }
     output[0] = cast(u8)0
     return random(random_context, output) &&
-        Hex64(TextFromCString(*output[0]))
+        Hex64(TextUntilNul(output[:]))
 }
 
 #scope_export
@@ -79,7 +79,7 @@ RegisterDevice :: (client: Client, session: *Session,
     registration.device_key_id = device.key_id
     registration.client_id = client.identity.client_id
     registration.public_key_hex = device.public_key_hex
-    registration.nonce = TextFromCString(*nonce[0])
+    registration.nonce = TextUntilNul(nonce[:])
     registration.expires_at = server_now + 300
     message: [1024]u8
     if !BuildDeviceRegistrationMessage(registration, message[:]) {
@@ -87,19 +87,19 @@ RegisterDevice :: (client: Client, session: *Session,
     }
     account_signature: [4841]u8
     if !client.signer(client.identity.signing_context,
-        TextFromCString(*message[0]), account_signature[:]) ||
-        !SignatureHex(TextFromCString(*account_signature[0]), 4840) {
+        TextUntilNul(message[:]), account_signature[:]) ||
+        !SignatureHex(TextUntilNul(account_signature[:]), 4840) {
         return cast(AuthResult)AuthResult.AUTH_SIGN_FAILED
     }
     body: [6144]u8
     if !BuildDeviceRegistrationBody(registration,
-        TextFromCString(*account_signature[0]), body[:]) {
+        TextUntilNul(account_signature[:]), body[:]) {
         return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
     }
     response: [2048]u8
     status: s32 = 0
     return BearerRequest(client, session, now, "POST",
-        "/api/v1/account/devices", TextFromCString(*body[0]),
+        "/api/v1/account/devices", TextUntilNul(body[:]),
         response[:], *status)
 }
 
@@ -124,7 +124,7 @@ Sync :: (client: Client, session: *Session, device: Device,
     if !CreateNonce(random_context, random, tx_id[:]) ||
         !CreateNonce(random_context, random, nonce[:]) ||
         !client.digest(body, body_hash[:]) ||
-        !Hex64(TextFromCString(*body_hash[0])) {
+        !Hex64(TextUntilNul(body_hash[:])) {
         return cast(AuthResult)AuthResult.AUTH_SIGN_FAILED
     }
     server_now := ServerNow(session, now)
@@ -135,9 +135,9 @@ Sync :: (client: Client, session: *Session, device: Device,
     transaction.account_id = client.identity.account_id
     transaction.app_id = client.app_id
     transaction.device_key_id = device.key_id
-    transaction.tx_id = TextFromCString(*tx_id[0])
-    transaction.nonce = TextFromCString(*nonce[0])
-    transaction.body_sha256_hex = TextFromCString(*body_hash[0])
+    transaction.tx_id = TextUntilNul(tx_id[:])
+    transaction.nonce = TextUntilNul(nonce[:])
+    transaction.body_sha256_hex = TextUntilNul(body_hash[:])
     transaction.expires_at = server_now + 300
     message: [1024]u8
     if !BuildSyncTransactionMessage(transaction, message[:]) {
@@ -146,23 +146,23 @@ Sync :: (client: Client, session: *Session, device: Device,
     account_signature: [4841]u8
     device_signature: [129]u8
     if !client.signer(client.identity.signing_context,
-        TextFromCString(*message[0]), account_signature[:]) ||
-        !SignatureHex(TextFromCString(*account_signature[0]), 4840) ||
+        TextUntilNul(message[:]), account_signature[:]) ||
+        !SignatureHex(TextUntilNul(account_signature[:]), 4840) ||
         !device.signer(device.signing_context,
-            TextFromCString(*message[0]), device_signature[:]) ||
-        !SignatureHex(TextFromCString(*device_signature[0]), 128) {
+            TextUntilNul(message[:]), device_signature[:]) ||
+        !SignatureHex(TextUntilNul(device_signature[:]), 128) {
         return cast(AuthResult)AuthResult.AUTH_SIGN_FAILED
     }
     transaction_header: [8192]u8
     if !BuildSyncTransactionHeader(transaction,
-        TextFromCString(*account_signature[0]),
-        TextFromCString(*device_signature[0]),
+        TextUntilNul(account_signature[:]),
+        TextUntilNul(device_signature[:]),
         transaction_header[:]) {
         return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
     }
     extra: [1]HttpHeader
     extra[0].name = "X-Daochi-Tx"
-    extra[0].value = TextFromCString(*transaction_header[0])
+    extra[0].value = TextUntilNul(transaction_header[:])
     return BearerRequestWithHeaders(client, session, now,
         "POST", "/api/v1/sync", body, output, status, extra[:])
 }

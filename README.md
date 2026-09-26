@@ -41,9 +41,9 @@ The library does not provision keys, revoke devices, store account data, or
 merge application records. Each app owns those operations and supplies its
 payload builder, response merge, key store, and platform transport.
 
-The current implementation targets Ziran's native C output. It imports
-`byte_text_linux` for borrowed byte buffer to string views; that module is
-outside the portable `.zib` subset. A portable Ziran text view operation is
-needed before this client can be bundled as `.zib` or used unchanged on every
-backend. Native Linux integration is tested; browser and Android transports
-remain application host work.
+The protocol now uses Ziran's `TextView` and bounded `TextUntilNul` instead of
+a native string-layout adapter. The full client is **not yet a `.zib` bundle**:
+the URL and wire builders still use pointer cursors outside the portable
+subset, and host capabilities still need bundle bindings. Native Linux
+integration is tested; browser and Android transports remain application host
+work.
