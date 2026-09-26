@@ -12,6 +12,7 @@ The portable modules currently provide:
 - canonical device registration and protocol v6 transaction messages
   (`transaction.zi`);
 - signed device registration and protocol v6 sync requests (`sync.zi`).
+- alias and friend requests, actions, lists, and stats (`social.zi`).
 
 The application supplies the account signer and body digest. A host supplies
 bounded HTTP requests through `SendRequest`; the host must NUL terminate every
@@ -31,7 +32,7 @@ curl module. Browser and Android hosts can implement the same boundary.
 `sh tests/run.sh` checks the library using the sibling `ziran` checkout. Set
 `ZIRAN_DIR` when that checkout is elsewhere.
 
-The client migration is in progress. This library does not yet handle social
-actions, remote events, device revocation, or platform key provisioning. Apps
+The client migration is in progress. This library does not yet handle remote
+events, device revocation, or platform key provisioning. Apps
 must connect their payload builder, response merge, key storage, and transport
 to the portable client.

@@ -1,0 +1,290 @@
+// Account and friend operations shared by every Daochi application.
+#import "client"
+#import "auth"
+#import "wire"
+#import "byte_text_linux"
+
+SpaceByte :: (byte: u8) -> bool {
+    return byte == cast(u8)32 || byte == cast(u8)9 ||
+        byte == cast(u8)10 || byte == cast(u8)13
+}
+
+LowerByte :: (byte: u8) -> u8 {
+    if byte >= cast(u8)65 && byte <= cast(u8)90 {
+        return byte + cast(u8)32
+    }
+    return byte
+}
+
+#scope_export
+#program_export
+NormalizeFriendTarget :: (target: string, output: []u8) -> bool {
+    if output.count < 6 { return false }
+    output[0] = cast(u8)0
+    at: s64 = 0
+    while at < cast(s64)target.count && SpaceByte(target[at]) {
+        at += 1
+    }
+    if at < cast(s64)target.count && target[at] == cast(u8)64 {
+        at += 1
+    }
+    if cast(s64)target.count - at >= 64 {
+        valid := true
+        index: s64 = 0
+        while index < 64 {
+            byte := LowerByte(target[at + index])
+            if !((byte >= cast(u8)48 && byte <= cast(u8)57) ||
+                (byte >= cast(u8)97 && byte <= cast(u8)102)) {
+                valid = false
+                break
+            }
+            index += 1
+        }
+        if valid && (at + 64 == cast(s64)target.count ||
+            SpaceByte(target[at + 64])) && output.count >= 65 {
+            index = 0
+            while index < 64 {
+                output[index] = LowerByte(target[at + index])
+                index += 1
+            }
+            output[64] = cast(u8)0
+            return true
+        }
+    }
+    if output.count < 34 { return false }
+    output[0] = cast(u8)64
+    length: s64 = 0
+    while at < cast(s64)target.count {
+        byte := LowerByte(target[at])
+        if SpaceByte(byte) { break }
+        if !((byte >= cast(u8)97 && byte <= cast(u8)122) ||
+            (byte >= cast(u8)48 && byte <= cast(u8)57) ||
+            byte == cast(u8)95) || length >= 32 {
+            output[0] = cast(u8)0
+            return false
+        }
+        output[length + 1] = byte
+        length += 1
+        at += 1
+    }
+    while at < cast(s64)target.count {
+        if !SpaceByte(target[at]) {
+            output[0] = cast(u8)0
+            return false
+        }
+        at += 1
+    }
+    if length < 4 { output[0] = cast(u8)0; return false }
+    output[length + 1] = cast(u8)0
+    return true
+}
+
+#scope_export
+#program_export
+BuildFriendRequestBody :: (target: string, output: []u8) -> bool {
+    if output.count == 0 { return false }
+    output[0] = cast(u8)0
+    normalized: [80]u8
+    if !NormalizeFriendTarget(target, normalized[:]) { return false }
+    cursor: s64 = 0
+    if !WriteText(output, *cursor, "{\"target\":") ||
+        !AppendJsonQuoted(output, *cursor,
+            TextFromCString(*normalized[0])) ||
+        !WriteByte(output, *cursor, cast(u8)125) {
+        output[0] = cast(u8)0
+        return false
+    }
+    return true
+}
+
+HexUpper :: (digit: u8) -> u8 {
+    if digit < 10 { return cast(u8)48 + digit }
+    return cast(u8)65 + digit - cast(u8)10
+}
+
+AppendQuery :: (output: []u8, cursor: *s64,
+    value: string) -> bool {
+    index: s64 = 0
+    while index < cast(s64)value.count {
+        byte := value[index]
+        ordinary := (byte >= cast(u8)65 && byte <= cast(u8)90) ||
+            (byte >= cast(u8)97 && byte <= cast(u8)122) ||
+            (byte >= cast(u8)48 && byte <= cast(u8)57) ||
+            byte == cast(u8)95 || byte == cast(u8)45 ||
+            byte == cast(u8)46 || byte == cast(u8)58
+        if ordinary {
+            if !WriteByte(output, cursor, byte) { return false }
+        } else if !WriteByte(output, cursor, cast(u8)37) ||
+            !WriteByte(output, cursor, HexUpper(byte / cast(u8)16)) ||
+            !WriteByte(output, cursor, HexUpper(byte % cast(u8)16)) {
+            return false
+        }
+        index += 1
+    }
+    return true
+}
+
+#scope_export
+#program_export
+BuildFriendStatsPath :: (app_id: string, practice: string,
+    metric: string, output: []u8) -> bool {
+    if output.count == 0 { return false }
+    output[0] = cast(u8)0
+    if app_id.count == 0 || practice.count == 0 || metric.count == 0 {
+        return false
+    }
+    cursor: s64 = 0
+    if !WriteText(output, *cursor, "/api/v1/friends/stats?app=") ||
+        !AppendQuery(output, *cursor, app_id) ||
+        !WriteText(output, *cursor, "&practice=") ||
+        !AppendQuery(output, *cursor, practice) ||
+        !WriteText(output, *cursor, "&metric=") ||
+        !AppendQuery(output, *cursor, metric) {
+        output[0] = cast(u8)0
+        return false
+    }
+    return true
+}
+
+PathSegment :: (value: string) -> bool {
+    if value.count == 0 || value.count > 128 { return false }
+    index: s64 = 0
+    while index < cast(s64)value.count {
+        byte := value[index]
+        if !((byte >= cast(u8)65 && byte <= cast(u8)90) ||
+            (byte >= cast(u8)97 && byte <= cast(u8)122) ||
+            (byte >= cast(u8)48 && byte <= cast(u8)57) ||
+            byte == cast(u8)45 || byte == cast(u8)95) {
+            return false
+        }
+        index += 1
+    }
+    return true
+}
+
+#scope_export
+#program_export
+BuildFriendActionPath :: (request_id: string, action: string,
+    output: []u8) -> bool {
+    if output.count == 0 { return false }
+    output[0] = cast(u8)0
+    if !PathSegment(request_id) ||
+        !(action == "accept" || action == "decline") { return false }
+    cursor: s64 = 0
+    return WriteText(output, *cursor, "/api/v1/friends/requests/") &&
+        WriteText(output, *cursor, request_id) &&
+        WriteByte(output, *cursor, cast(u8)47) &&
+        WriteText(output, *cursor, action)
+}
+
+#scope_export
+#program_export
+BuildFriendPath :: (friend_id: string, output: []u8) -> bool {
+    if output.count == 0 { return false }
+    output[0] = cast(u8)0
+    if !Hex64(friend_id) { return false }
+    cursor: s64 = 0
+    return WriteText(output, *cursor, "/api/v1/friends/") &&
+        WriteText(output, *cursor, friend_id)
+}
+
+#scope_export
+#program_export
+BuildAliasBody :: (account_id: string, alias: string,
+    output: []u8) -> bool {
+    if output.count == 0 { return false }
+    output[0] = cast(u8)0
+    if !Hex64(account_id) || alias.count == 0 || alias.count > 64 {
+        return false
+    }
+    cursor: s64 = 0
+    if !WriteText(output, *cursor, "{\"user_id_hash\":") ||
+        !AppendJsonQuoted(output, *cursor, account_id) ||
+        !WriteText(output, *cursor, ",\"alias\":") ||
+        !AppendJsonQuoted(output, *cursor, alias) ||
+        !WriteByte(output, *cursor, cast(u8)125) {
+        output[0] = cast(u8)0
+        return false
+    }
+    return true
+}
+
+#scope_export
+#program_export
+SendFriendRequest :: (client: Client, session: *Session, now: s64,
+    target: string, output: []u8, status: *s32) -> AuthResult {
+    body: [256]u8
+    if !BuildFriendRequestBody(target, body[:]) {
+        return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
+    }
+    return BearerRequest(client, session, now, "POST",
+        "/api/v1/friends/requests", TextFromCString(*body[0]),
+        output, status)
+}
+
+#scope_export
+#program_export
+FriendAction :: (client: Client, session: *Session, now: s64,
+    request_id: string, action: string, output: []u8,
+    status: *s32) -> AuthResult {
+    path: [256]u8
+    if !BuildFriendActionPath(request_id, action, path[:]) {
+        return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
+    }
+    return BearerRequest(client, session, now, "POST",
+        TextFromCString(*path[0]), "{}", output, status)
+}
+
+#scope_export
+#program_export
+RemoveFriend :: (client: Client, session: *Session, now: s64,
+    friend_id: string, output: []u8, status: *s32) -> AuthResult {
+    path: [128]u8
+    if !BuildFriendPath(friend_id, path[:]) {
+        return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
+    }
+    return BearerRequest(client, session, now, "DELETE",
+        TextFromCString(*path[0]), "", output, status)
+}
+
+#scope_export
+#program_export
+FriendRequests :: (client: Client, session: *Session, now: s64,
+    output: []u8, status: *s32) -> AuthResult {
+    return BearerRequest(client, session, now, "GET",
+        "/api/v1/friends/requests", "", output, status)
+}
+
+#scope_export
+#program_export
+Friends :: (client: Client, session: *Session, now: s64,
+    output: []u8, status: *s32) -> AuthResult {
+    return BearerRequest(client, session, now, "GET",
+        "/api/v1/friends", "", output, status)
+}
+
+#scope_export
+#program_export
+FriendStats :: (client: Client, session: *Session, now: s64,
+    practice: string, metric: string, output: []u8,
+    status: *s32) -> AuthResult {
+    path: [768]u8
+    if !BuildFriendStatsPath(client.app_id, practice, metric, path[:]) {
+        return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
+    }
+    return BearerRequest(client, session, now, "GET",
+        TextFromCString(*path[0]), "", output, status)
+}
+
+#scope_export
+#program_export
+RegisterAlias :: (client: Client, session: *Session, now: s64,
+    alias: string, output: []u8, status: *s32) -> AuthResult {
+    body: [512]u8
+    if !BuildAliasBody(client.identity.account_id, alias, body[:]) {
+        return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
+    }
+    return BearerRequest(client, session, now, "POST",
+        "/api/v1/account/alias", TextFromCString(*body[0]),
+        output, status)
+}
