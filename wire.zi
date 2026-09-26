@@ -1,6 +1,7 @@
 // Daochi client wire values shared by apps. The caller owns account keys,
 // hashing, HTTP transport, and the destination buffers.
 
+#scope_export
 WriteByte :: (output: []u8, cursor: *s64, byte: u8) -> bool {
     if cursor.* < 0 || cursor.* + 1 >= output.count {
         return false
@@ -11,6 +12,7 @@ WriteByte :: (output: []u8, cursor: *s64, byte: u8) -> bool {
     return true
 }
 
+#scope_export
 WriteText :: (output: []u8, cursor: *s64, value: string) -> bool {
     if cursor.* < 0 || value.count >= output.count - cursor.* {
         return false
@@ -31,6 +33,7 @@ HexDigit :: (byte: u8) -> bool {
         (byte >= cast(u8)97 && byte <= cast(u8)102)
 }
 
+#scope_export
 Hex64 :: (value: string) -> bool {
     if value.count != 64 {
         return false
@@ -52,6 +55,7 @@ HexUpper :: (value: u8) -> u8 {
     return cast(u8)65 + value - cast(u8)10
 }
 
+#scope_export
 AppendJsonQuoted :: (output: []u8, cursor: *s64,
     value: string) -> bool {
     if !WriteByte(output, cursor, cast(u8)34) {

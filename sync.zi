@@ -1,0 +1,168 @@
+// Protocol v6 sync orchestration. The host provisions and stores device keys;
+// this module signs the Daochi wire messages and sends them through Client.
+#import "client"
+#import "auth"
+#import "transaction"
+#import "wire"
+#import "net_http"
+#import "byte_text_linux"
+
+RandomNonce :: #type (context: *void, output: []u8) -> bool #c_call;
+
+Device :: struct {
+    key_id: string
+    public_key_hex: string
+    signing_context: *void
+    signer: SignMessage
+}
+
+SignatureHex :: (value: string, length: s64) -> bool {
+    if cast(s64)value.count != length {
+        return false
+    }
+    index: s64 = 0
+    while index < length {
+        byte := value[index]
+        if !((byte >= cast(u8)48 && byte <= cast(u8)57) ||
+            (byte >= cast(u8)65 && byte <= cast(u8)70) ||
+            (byte >= cast(u8)97 && byte <= cast(u8)102)) {
+            return false
+        }
+        index += 1
+    }
+    return true
+}
+
+ServerNow :: (session: *Session, now: s64) -> s64 {
+    if session.server_time <= 0 || session.login_local_time <= 0 ||
+        now < session.login_local_time ||
+        now - session.login_local_time > 86400 {
+        return now
+    }
+    return session.server_time + now - session.login_local_time
+}
+
+CreateNonce :: (random_context: *void, random: RandomNonce,
+    output: []u8) -> bool {
+    if output.count < 65 {
+        return false
+    }
+    output[0] = cast(u8)0
+    return random(random_context, output) &&
+        Hex64(TextFromCString(*output[0]))
+}
+
+#scope_export
+#program_export
+RegisterDevice :: (client: Client, session: *Session,
+    device: Device, now: s64, random_context: *void,
+    random: RandomNonce) -> AuthResult {
+    ready := EnsureSession(client, session, now)
+    if ready != cast(AuthResult)AuthResult.AUTH_OK {
+        return ready
+    }
+    if !Hex64(device.key_id) ||
+        !Hex64(device.public_key_hex) {
+        return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
+    }
+    nonce: [65]u8
+    if !CreateNonce(random_context, random, nonce[:]) {
+        return cast(AuthResult)AuthResult.AUTH_SIGN_FAILED
+    }
+    server_now := ServerNow(session, now)
+    if server_now <= 0 || server_now > 9007199254740691 {
+        return cast(AuthResult)AuthResult.AUTH_SIGN_FAILED
+    }
+    registration: DeviceRegistration
+    registration.account_id = client.identity.account_id
+    registration.app_id = client.app_id
+    registration.device_key_id = device.key_id
+    registration.client_id = client.identity.client_id
+    registration.public_key_hex = device.public_key_hex
+    registration.nonce = TextFromCString(*nonce[0])
+    registration.expires_at = server_now + 300
+    message: [1024]u8
+    if !BuildDeviceRegistrationMessage(registration, message[:]) {
+        return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
+    }
+    account_signature: [4841]u8
+    if !client.signer(client.identity.signing_context,
+        TextFromCString(*message[0]), account_signature[:]) ||
+        !SignatureHex(TextFromCString(*account_signature[0]), 4840) {
+        return cast(AuthResult)AuthResult.AUTH_SIGN_FAILED
+    }
+    body: [6144]u8
+    if !BuildDeviceRegistrationBody(registration,
+        TextFromCString(*account_signature[0]), body[:]) {
+        return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
+    }
+    response: [2048]u8
+    status: s32 = 0
+    return BearerRequest(client, session, now, "POST",
+        "/api/v1/account/devices", TextFromCString(*body[0]),
+        response[:], *status)
+}
+
+#scope_export
+#program_export
+Sync :: (client: Client, session: *Session, device: Device,
+    now: s64, random_context: *void, random: RandomNonce,
+    body: string, output: []u8, status: *s32) -> AuthResult {
+    if output.count == 0 || status == null || body.count == 0 {
+        return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
+    }
+    output[0] = cast(u8)0
+    status.* = 0
+    registered := RegisterDevice(client, session, device, now,
+        random_context, random)
+    if registered != cast(AuthResult)AuthResult.AUTH_OK {
+        return registered
+    }
+    tx_id: [65]u8
+    nonce: [65]u8
+    body_hash: [65]u8
+    if !CreateNonce(random_context, random, tx_id[:]) ||
+        !CreateNonce(random_context, random, nonce[:]) ||
+        !client.digest(body, body_hash[:]) ||
+        !Hex64(TextFromCString(*body_hash[0])) {
+        return cast(AuthResult)AuthResult.AUTH_SIGN_FAILED
+    }
+    server_now := ServerNow(session, now)
+    if server_now <= 0 || server_now > 9007199254740691 {
+        return cast(AuthResult)AuthResult.AUTH_SIGN_FAILED
+    }
+    transaction: SyncTransaction
+    transaction.account_id = client.identity.account_id
+    transaction.app_id = client.app_id
+    transaction.device_key_id = device.key_id
+    transaction.tx_id = TextFromCString(*tx_id[0])
+    transaction.nonce = TextFromCString(*nonce[0])
+    transaction.body_sha256_hex = TextFromCString(*body_hash[0])
+    transaction.expires_at = server_now + 300
+    message: [1024]u8
+    if !BuildSyncTransactionMessage(transaction, message[:]) {
+        return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
+    }
+    account_signature: [4841]u8
+    device_signature: [129]u8
+    if !client.signer(client.identity.signing_context,
+        TextFromCString(*message[0]), account_signature[:]) ||
+        !SignatureHex(TextFromCString(*account_signature[0]), 4840) ||
+        !device.signer(device.signing_context,
+            TextFromCString(*message[0]), device_signature[:]) ||
+        !SignatureHex(TextFromCString(*device_signature[0]), 128) {
+        return cast(AuthResult)AuthResult.AUTH_SIGN_FAILED
+    }
+    transaction_header: [8192]u8
+    if !BuildSyncTransactionHeader(transaction,
+        TextFromCString(*account_signature[0]),
+        TextFromCString(*device_signature[0]),
+        transaction_header[:]) {
+        return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
+    }
+    extra: [1]HttpHeader
+    extra[0].name = "X-Daochi-Tx"
+    extra[0].value = TextFromCString(*transaction_header[0])
+    return BearerRequestWithHeaders(client, session, now,
+        "POST", "/api/v1/sync", body, output, status, extra[:])
+}

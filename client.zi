@@ -11,6 +11,7 @@ SendRequest :: #type (context: *void, request: HttpRequest,
 
 Client :: struct {
     server_url: string
+    app_id: string
     identity: Identity
     digest: DigestBody
     signer: SignMessage
@@ -124,12 +125,29 @@ TokenValid :: (session: *Session, now: s64) -> bool {
 }
 
 SetExpiry :: (session: *Session, now: s64) {
+    session.login_local_time = now
     session.expires_at_local = now
     if now < 0 || session.expires_in_seconds <= 30 ||
         session.expires_in_seconds > 9007199254740991 - now {
         return
     }
     session.expires_at_local = now + session.expires_in_seconds - 30
+}
+
+#scope_export
+EnsureSession :: (client: Client, session: *Session,
+    now: s64) -> AuthResult {
+    if session == null {
+        return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
+    }
+    if TokenValid(session, now) {
+        return cast(AuthResult)AuthResult.AUTH_OK
+    }
+    result := Login(client, session)
+    if result == cast(AuthResult)AuthResult.AUTH_OK {
+        SetExpiry(session, now)
+    }
+    return result
 }
 
 #scope_export
@@ -144,15 +162,16 @@ ClearSession :: (session: *Session) {
 // and retries the original request. The caller persists the resulting session.
 #scope_export
 #program_export
-BearerRequest :: (client: Client, session: *Session, now: s64,
+BearerRequestWithHeaders :: (client: Client, session: *Session, now: s64,
     method: string, path: string, body: string, output: []u8,
-    status: *s32) -> AuthResult {
+    status: *s32, extra_headers: []HttpHeader) -> AuthResult {
     if output.count == 0 || session == null || status == null {
         return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
     }
     output[0] = cast(u8)0
     status.* = 0
-    if !MethodValid(method) || !PathValid(path) {
+    if !MethodValid(method) || !PathValid(path) ||
+        extra_headers.count > 14 {
         return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
     }
     server: [512]u8
@@ -163,26 +182,30 @@ BearerRequest :: (client: Client, session: *Session, now: s64,
     if !JoinUrl(TextFromCString(*server[0]), path, url[:]) {
         return cast(AuthResult)AuthResult.AUTH_INVALID_URL
     }
-    if !TokenValid(session, now) {
-        login_result := Login(client, session)
-        if login_result != cast(AuthResult)AuthResult.AUTH_OK {
-            return login_result
-        }
-        SetExpiry(session, now)
+    ready := EnsureSession(client, session, now)
+    if ready != cast(AuthResult)AuthResult.AUTH_OK {
+        return ready
     }
     attempt: s32 = 0
     while attempt < 2 {
-        headers: [2]HttpHeader
+        headers: [16]HttpHeader
         headers[0].name = "X-Daochi-User"
         headers[0].value = client.identity.account_id
         headers[1].name = "X-Daochi-Client"
         headers[1].value = client.identity.client_id
+        header_count: s64 = 2
+        index: s64 = 0
+        while index < cast(s64)extra_headers.count {
+            headers[header_count] = extra_headers[index]
+            header_count += 1
+            index += 1
+        }
         request: HttpRequest
         request.method = method
         request.url = TextFromCString(*url[0])
         request.token = TextFromCString(*session.token[0])
         request.accept = "application/json"
-        request.headers = headers[:]
+        request.headers = headers[0:header_count]
         if body.count > 0 {
             request.body = body
             request.content_type = "application/json"
@@ -203,12 +226,21 @@ BearerRequest :: (client: Client, session: *Session, now: s64,
         if attempt == 1 {
             return cast(AuthResult)AuthResult.AUTH_FAILED
         }
-        login_result := Login(client, session)
+        login_result := EnsureSession(client, session, now)
         if login_result != cast(AuthResult)AuthResult.AUTH_OK {
             return login_result
         }
-        SetExpiry(session, now)
         attempt += 1
     }
     return cast(AuthResult)AuthResult.AUTH_FAILED
+}
+
+#scope_export
+#program_export
+BearerRequest :: (client: Client, session: *Session, now: s64,
+    method: string, path: string, body: string, output: []u8,
+    status: *s32) -> AuthResult {
+    empty: [1]HttpHeader
+    return BearerRequestWithHeaders(client, session, now, method, path,
+        body, output, status, empty[0:0])
 }

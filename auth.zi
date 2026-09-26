@@ -29,6 +29,7 @@ Session :: struct {
     expires_in_seconds: s64
     server_time: s64
     expires_at_local: s64
+    login_local_time: s64
 }
 
 DigestBody :: #type (body: string, output: []u8) -> bool #c_call;

@@ -1,0 +1,242 @@
+// Protocol v6 device registration and signed sync transaction wire formats.
+#import "wire"
+
+DeviceRegistration :: struct {
+    account_id: string
+    app_id: string
+    device_key_id: string
+    client_id: string
+    public_key_hex: string
+    nonce: string
+    expires_at: s64
+}
+
+SyncTransaction :: struct {
+    account_id: string
+    app_id: string
+    device_key_id: string
+    tx_id: string
+    nonce: string
+    body_sha256_hex: string
+    expires_at: s64
+}
+
+PlainText :: (value: string) -> bool {
+    if value.count == 0 {
+        return false
+    }
+    index: s64 = 0
+    while index < cast(s64)value.count {
+        byte := value[index]
+        if byte < cast(u8)33 || byte >= cast(u8)127 ||
+            byte == cast(u8)34 || byte == cast(u8)92 {
+            return false
+        }
+        index += 1
+    }
+    return true
+}
+
+HexText :: (value: string, length: s64) -> bool {
+    if cast(s64)value.count != length {
+        return false
+    }
+    index: s64 = 0
+    while index < length {
+        byte := value[index]
+        if !((byte >= cast(u8)48 && byte <= cast(u8)57) ||
+            (byte >= cast(u8)65 && byte <= cast(u8)70) ||
+            (byte >= cast(u8)97 && byte <= cast(u8)102)) {
+            return false
+        }
+        index += 1
+    }
+    return true
+}
+
+WriteDecimal :: (output: []u8, cursor: *s64, value: s64) -> bool {
+    if value < 0 {
+        return false
+    }
+    digits: [20]u8
+    count: s64 = 0
+    remaining := value
+    if remaining == 0 {
+        digits[0] = cast(u8)48
+        count = 1
+    }
+    while remaining > 0 {
+        digits[count] = cast(u8)48 + cast(u8)(remaining % 10)
+        count += 1
+        remaining /= 10
+    }
+    while count > 0 {
+        count -= 1
+        if !WriteByte(output, cursor, digits[count]) {
+            return false
+        }
+    }
+    return true
+}
+
+RegistrationValid :: (request: DeviceRegistration) -> bool {
+    return Hex64(request.account_id) &&
+        PlainText(request.app_id) &&
+        Hex64(request.device_key_id) &&
+        PlainText(request.client_id) &&
+        Hex64(request.public_key_hex) &&
+        Hex64(request.nonce) && request.expires_at > 0
+}
+
+TransactionValid :: (transaction: SyncTransaction) -> bool {
+    return Hex64(transaction.account_id) &&
+        PlainText(transaction.app_id) &&
+        Hex64(transaction.device_key_id) &&
+        Hex64(transaction.tx_id) &&
+        Hex64(transaction.nonce) &&
+        Hex64(transaction.body_sha256_hex) &&
+        transaction.expires_at > 0
+}
+
+#scope_export
+#program_export
+BuildDeviceRegistrationMessage :: (request: DeviceRegistration,
+    output: []u8) -> bool {
+    if output.count == 0 {
+        return false
+    }
+    output[0] = cast(u8)0
+    if !RegistrationValid(request) {
+        return false
+    }
+    cursor: s64 = 0
+    if !WriteText(output, *cursor, "daochi-device-registration-v1\n") ||
+        !WriteText(output, *cursor, request.account_id) ||
+        !WriteByte(output, *cursor, cast(u8)10) ||
+        !WriteText(output, *cursor, request.app_id) ||
+        !WriteByte(output, *cursor, cast(u8)10) ||
+        !WriteText(output, *cursor, request.device_key_id) ||
+        !WriteByte(output, *cursor, cast(u8)10) ||
+        !WriteText(output, *cursor, request.client_id) ||
+        !WriteByte(output, *cursor, cast(u8)10) ||
+        !WriteText(output, *cursor, request.public_key_hex) ||
+        !WriteByte(output, *cursor, cast(u8)10) ||
+        !WriteText(output, *cursor, request.nonce) ||
+        !WriteByte(output, *cursor, cast(u8)10) ||
+        !WriteDecimal(output, *cursor, request.expires_at) ||
+        !WriteByte(output, *cursor, cast(u8)10) {
+        output[0] = cast(u8)0
+        return false
+    }
+    return true
+}
+
+#scope_export
+#program_export
+BuildDeviceRegistrationBody :: (request: DeviceRegistration,
+    account_signature_hex: string, output: []u8) -> bool {
+    if output.count == 0 {
+        return false
+    }
+    output[0] = cast(u8)0
+    if !RegistrationValid(request) ||
+        !HexText(account_signature_hex, 4840) {
+        return false
+    }
+    cursor: s64 = 0
+    if !WriteText(output, *cursor, "{\"app_id\":") ||
+        !AppendJsonQuoted(output, *cursor, request.app_id) ||
+        !WriteText(output, *cursor, ",\"device_key_id\":") ||
+        !AppendJsonQuoted(output, *cursor, request.device_key_id) ||
+        !WriteText(output, *cursor, ",\"client_id\":") ||
+        !AppendJsonQuoted(output, *cursor, request.client_id) ||
+        !WriteText(output, *cursor, ",\"public_key\":") ||
+        !AppendJsonQuoted(output, *cursor, request.public_key_hex) ||
+        !WriteText(output, *cursor, ",\"nonce\":") ||
+        !AppendJsonQuoted(output, *cursor, request.nonce) ||
+        !WriteText(output, *cursor, ",\"expires_at\":") ||
+        !WriteDecimal(output, *cursor, request.expires_at) ||
+        !WriteText(output, *cursor, ",\"signature\":") ||
+        !AppendJsonQuoted(output, *cursor, account_signature_hex) ||
+        !WriteByte(output, *cursor, cast(u8)125) {
+        output[0] = cast(u8)0
+        return false
+    }
+    return true
+}
+
+#scope_export
+#program_export
+BuildSyncTransactionMessage :: (transaction: SyncTransaction,
+    output: []u8) -> bool {
+    if output.count == 0 {
+        return false
+    }
+    output[0] = cast(u8)0
+    if !TransactionValid(transaction) {
+        return false
+    }
+    cursor: s64 = 0
+    if !WriteText(output, *cursor, "daochi-tx-v1\n6\n") ||
+        !WriteText(output, *cursor, transaction.tx_id) ||
+        !WriteByte(output, *cursor, cast(u8)10) ||
+        !WriteText(output, *cursor, transaction.account_id) ||
+        !WriteByte(output, *cursor, cast(u8)10) ||
+        !WriteText(output, *cursor, transaction.app_id) ||
+        !WriteByte(output, *cursor, cast(u8)10) ||
+        !WriteText(output, *cursor, transaction.device_key_id) ||
+        !WriteText(output, *cursor, "\nPOST\n/api/v1/sync\n") ||
+        !WriteText(output, *cursor, transaction.body_sha256_hex) ||
+        !WriteByte(output, *cursor, cast(u8)10) ||
+        !WriteText(output, *cursor, transaction.nonce) ||
+        !WriteByte(output, *cursor, cast(u8)10) ||
+        !WriteDecimal(output, *cursor, transaction.expires_at) ||
+        !WriteByte(output, *cursor, cast(u8)10) {
+        output[0] = cast(u8)0
+        return false
+    }
+    return true
+}
+
+#scope_export
+#program_export
+BuildSyncTransactionHeader :: (transaction: SyncTransaction,
+    account_signature_hex: string, device_signature_hex: string,
+    output: []u8) -> bool {
+    if output.count == 0 {
+        return false
+    }
+    output[0] = cast(u8)0
+    if !TransactionValid(transaction) ||
+        !HexText(account_signature_hex, 4840) ||
+        !HexText(device_signature_hex, 128) {
+        return false
+    }
+    cursor: s64 = 0
+    if !WriteText(output, *cursor, "{\"protocol_version\":6,\"tx_id\":") ||
+        !AppendJsonQuoted(output, *cursor, transaction.tx_id) ||
+        !WriteText(output, *cursor, ",\"account_id\":") ||
+        !AppendJsonQuoted(output, *cursor, transaction.account_id) ||
+        !WriteText(output, *cursor, ",\"app_id\":") ||
+        !AppendJsonQuoted(output, *cursor, transaction.app_id) ||
+        !WriteText(output, *cursor, ",\"device_key_id\":") ||
+        !AppendJsonQuoted(output, *cursor, transaction.device_key_id) ||
+        !WriteText(output, *cursor,
+            ",\"method\":\"POST\",\"path\":\"/api/v1/sync\",\"body_sha256\":") ||
+        !AppendJsonQuoted(output, *cursor,
+            transaction.body_sha256_hex) ||
+        !WriteText(output, *cursor, ",\"nonce\":") ||
+        !AppendJsonQuoted(output, *cursor, transaction.nonce) ||
+        !WriteText(output, *cursor, ",\"expires_at\":") ||
+        !WriteDecimal(output, *cursor, transaction.expires_at) ||
+        !WriteText(output, *cursor,
+            ",\"signature_context\":\"daochi-tx-v1\",\"signature\":") ||
+        !AppendJsonQuoted(output, *cursor, account_signature_hex) ||
+        !WriteText(output, *cursor, ",\"device_signature\":") ||
+        !AppendJsonQuoted(output, *cursor, device_signature_hex) ||
+        !WriteByte(output, *cursor, cast(u8)125) {
+        output[0] = cast(u8)0
+        return false
+    }
+    return true
+}
