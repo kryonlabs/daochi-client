@@ -1,0 +1,26 @@
+#import "url"
+#import "text_buffer"
+
+#program_export
+Check :: () -> s32 {
+    output: [96]u8
+    if !NormalizeUrl("127.0.0.1:8080", output[:]) ||
+        TextUntilNul(output[:]) != "http://127.0.0.1:8080" {
+        return 1
+    }
+    if !JoinUrl("https://example.test/", "/api/v1/sync", output[:]) ||
+        TextUntilNul(output[:]) != "https://example.test/api/v1/sync" {
+        return 2
+    }
+    if !JoinWebSocketUrl("https://example.test", "/events", output[:]) ||
+        TextUntilNul(output[:]) != "wss://example.test/events" {
+        return 3
+    }
+    if NormalizeUrl("https://example.test", output[0:4]) || output[0] != 0 {
+        return 4
+    }
+    if NormalizeUrl("http://example.test", output[:]) {
+        return 5
+    }
+    return 0
+}

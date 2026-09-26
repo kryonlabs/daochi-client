@@ -4,6 +4,7 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 ziran=${ZIRAN_DIR:-"$root/../ziran"}
 compiler=${ZI2C_BIN:-"$ziran/build/bin/zi2c"}
+ziran_bin=${ZIRAN_BIN:-"$(dirname "$compiler")/ziran"}
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 
@@ -27,3 +28,10 @@ for test in wire auth url client transaction sync social account events; do
         -o "$work/${test}_test"
     env -u DISPLAY -u WAYLAND_DISPLAY "$work/${test}_test"
 done
+
+"$ziran_bin" bundle --root "$root/tests" \
+    --module-path "$root" --module-path "$ziran/std" \
+    --entry url_portable:Check -o "$work/url.zib" \
+    "$root/tests/url_portable.zi"
+test "$("$ziran_bin" run "$work/url.zib")" = 0
+echo 'Daochi Ziran URL portable bundle passed'

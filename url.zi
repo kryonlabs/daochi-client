@@ -119,29 +119,31 @@ NormalizeUrl :: (input: string, output: []u8) -> bool {
     cursor: s64 = 0
     if !StartsWith(input, "https://") &&
         !StartsWith(input, "http://") {
-        if !WriteUrlText(output, *cursor, "http://") {
+        cursor = WriteUrlText(output, cursor, "http://")
+        if cursor < 0 {
             return false
         }
     }
-    if !WriteUrlText(output, *cursor, input) {
+    cursor = WriteUrlText(output, cursor, input)
+    if cursor < 0 {
         output[0] = cast(u8)0
         return false
     }
     return true
 }
 
-WriteUrlText :: (output: []u8, cursor: *s64, value: string) -> bool {
-    if cursor.* < 0 || value.count >= output.count - cursor.* {
-        return false
+WriteUrlText :: (output: []u8, cursor: s64, value: string) -> s64 {
+    if cursor < 0 || value.count >= output.count - cursor {
+        return -1
     }
     index: s64 = 0
     while index < cast(s64)value.count {
-        output[cursor.*] = value[index]
-        cursor.* += 1
+        output[cursor] = value[index]
+        cursor += 1
         index += 1
     }
-    output[cursor.*] = cast(u8)0
-    return true
+    output[cursor] = cast(u8)0
+    return cursor
 }
 
 #scope_export
@@ -160,8 +162,11 @@ JoinUrl :: (base_url: string, path: string, output: []u8) -> bool {
         end -= 1
     }
     cursor: s64 = 0
-    if !WriteUrlText(output, *cursor, base_url[0:end]) ||
-        !WriteUrlText(output, *cursor, path) {
+    cursor = WriteUrlText(output, cursor, base_url[0:end])
+    if cursor >= 0 {
+        cursor = WriteUrlText(output, cursor, path)
+    }
+    if cursor < 0 {
         output[0] = cast(u8)0
         return false
     }
@@ -182,16 +187,21 @@ JoinWebSocketUrl :: (base_url: string, path: string,
     }
     url := TextUntilNul(http_url[:])
     cursor: s64 = 0
-    complete := false
     if StartsWith(url, "https://") {
-        complete = WriteUrlText(output, *cursor, "wss://") &&
-            WriteUrlText(output, *cursor, url[8:])
+        cursor = WriteUrlText(output, cursor, "wss://")
+        if cursor >= 0 {
+            cursor = WriteUrlText(output, cursor, url[8:])
+        }
     } else if StartsWith(url, "http://") {
-        complete = WriteUrlText(output, *cursor, "ws://") &&
-            WriteUrlText(output, *cursor, url[7:])
+        cursor = WriteUrlText(output, cursor, "ws://")
+        if cursor >= 0 {
+            cursor = WriteUrlText(output, cursor, url[7:])
+        }
+    } else {
+        cursor = -1
     }
-    if !complete {
+    if cursor < 0 {
         output[0] = cast(u8)0
     }
-    return complete
+    return cursor >= 0
 }
