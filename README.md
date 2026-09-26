@@ -11,8 +11,8 @@ The portable modules currently provide:
 - login and bearer requests with one fresh login after a `401` (`client.zi`);
 - canonical device registration and protocol v6 transaction messages
   (`transaction.zi`);
-- signed device registration and protocol v6 sync requests (`sync.zi`).
-- alias and friend requests, actions, lists, and stats (`social.zi`).
+- signed device registration and protocol v6 sync requests (`sync.zi`);
+- alias and friend requests, actions, lists, and stats (`social.zi`);
 - challenge signed account deletion without transmitting a key backup
   (`account.zi`).
 - WebSocket URL, event validation, and one event wait through a host callback
@@ -30,13 +30,13 @@ import `client` and `sync`. Set `Client.app_id`, supply a `Device` with a
 persisted Ed25519 key and signer, and supply a cryptographically random 64-digit
 hex nonce callback. `Sync` registers the device and signs the exact sync body
 with both the account and device keys. The app owns the payload format and
-merges the response. For an Inbe native host, adapt `SendRequest` to Ziran's
-curl module. Browser and Android hosts can implement the same boundary.
+merges the response. A native host can adapt `SendRequest` to Ziran's curl HTTP
+module and `ReceiveEvent` to its bounded curl WebSocket module. Browser and
+Android hosts must implement those host boundaries before those builds sync.
 
 `sh tests/run.sh` checks the library using the sibling `ziran` checkout. Set
 `ZIRAN_DIR` when that checkout is elsewhere.
 
-The client migration is in progress. This library does not yet handle device
-revocation or platform key provisioning. Apps
-must connect their payload builder, response merge, key storage, and transport
-to the portable client.
+The library does not provision keys, revoke devices, store account data, or
+merge application records. Each app owns those operations and supplies its
+payload builder, response merge, key store, and platform transport.
