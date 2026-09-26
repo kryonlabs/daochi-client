@@ -3,7 +3,7 @@
 Daochi Client is the independent Ziran library for applications that sync with
 Daochi. It contains no server, mesh node, database, or UI implementation.
 
-The portable modules currently provide:
+The protocol modules currently provide:
 
 - canonical challenge, login body, and signed message builders (`wire.zi`);
 - HTTPS and local network URL policy (`url.zi`);
@@ -40,3 +40,10 @@ Android hosts must implement those host boundaries before those builds sync.
 The library does not provision keys, revoke devices, store account data, or
 merge application records. Each app owns those operations and supplies its
 payload builder, response merge, key store, and platform transport.
+
+The current implementation targets Ziran's native C output. It imports
+`byte_text_linux` for borrowed byte buffer to string views; that module is
+outside the portable `.zib` subset. A portable Ziran text view operation is
+needed before this client can be bundled as `.zib` or used unchanged on every
+backend. Native Linux integration is tested; browser and Android transports
+remain application host work.
