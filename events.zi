@@ -1,0 +1,104 @@
+// Remote sync events are transport independent. Hosts open the WebSocket and
+// return one bounded JSON event through ReceiveEvent.
+#import "client"
+#import "auth"
+#import "url"
+#import "byte_text_linux"
+
+EventKind :: enum {
+    EVENT_INVALID :: 0
+    EVENT_READY :: 1
+    EVENT_CHANGED :: 2
+}
+
+using EventKind;
+
+RemoteEvent :: struct {
+    kind: EventKind
+    server_version: s64
+}
+
+ReceiveEvent :: #type (context: *void, url: string, token: string,
+    output: []u8, status: *s32) -> bool #c_call;
+
+#scope_export
+#program_export
+EventUrl :: (server_url: string, output: []u8) -> bool {
+    if output.count == 0 { return false }
+    normalized: [512]u8
+    if !NormalizeUrl(server_url, normalized[:]) {
+        output[0] = cast(u8)0
+        return false
+    }
+    return JoinWebSocketUrl(TextFromCString(*normalized[0]),
+        "/api/v1/sync/ws", output)
+}
+
+#scope_export
+#program_export
+ParseRemoteEvent :: (json: string, account_id: string) -> RemoteEvent {
+    event: RemoteEvent
+    if !HexText(account_id, 64) { return event }
+    kind: [32]u8
+    owner: [65]u8
+    if !FieldText(json, "type", kind[:]) ||
+        !FieldText(json, "user_id_hash", owner[:]) ||
+        !HexText(TextFromCString(*owner[0]), 64) {
+        return event
+    }
+    index: s64 = 0
+    while index < 64 {
+        if owner[index] != account_id[index] { return event }
+        index += 1
+    }
+    event.server_version = FieldNumber(json, "server_version", -1)
+    if event.server_version < 0 { event.server_version = 0; return event }
+    event_type := TextFromCString(*kind[0])
+    if event_type == "sync_ready" {
+        event.kind = cast(EventKind)EVENT_READY
+    } else if event_type == "sync_changed" {
+        event.kind = cast(EventKind)EVENT_CHANGED
+    }
+    return event
+}
+
+#scope_export
+#program_export
+WaitForEvent :: (client: Client, session: *Session, now: s64,
+    receive_context: *void, receive: ReceiveEvent,
+    event: *RemoteEvent) -> AuthResult {
+    if session == null || event == null {
+        return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
+    }
+    event.* = RemoteEvent.{}
+    url: [2048]u8
+    if !EventUrl(client.server_url, url[:]) {
+        return cast(AuthResult)AuthResult.AUTH_INVALID_URL
+    }
+    ready := EnsureSession(client, session, now)
+    if ready != cast(AuthResult)AuthResult.AUTH_OK { return ready }
+    attempt: s32 = 0
+    while attempt < 2 {
+        response: [4096]u8
+        status: s32 = 0
+        if receive(receive_context, TextFromCString(*url[0]),
+            TextFromCString(*session.token[0]), response[:], *status) &&
+            status == 200 {
+            event.* = ParseRemoteEvent(TextFromCString(*response[0]),
+                client.identity.account_id)
+            if event.kind == cast(EventKind)EVENT_INVALID {
+                return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
+            }
+            return cast(AuthResult)AuthResult.AUTH_OK
+        }
+        if status != 401 { return cast(AuthResult)AuthResult.AUTH_REQUEST_FAILED }
+        ClearSession(session)
+        if attempt == 1 { return cast(AuthResult)AuthResult.AUTH_FAILED }
+        login_result := EnsureSession(client, session, now)
+        if login_result != cast(AuthResult)AuthResult.AUTH_OK {
+            return login_result
+        }
+        attempt += 1
+    }
+    return cast(AuthResult)AuthResult.AUTH_FAILED
+}
