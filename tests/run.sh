@@ -3,10 +3,11 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 ziran=${ZIRAN_DIR:-"$root/../ziran"}
+compiler=${ZI2C_BIN:-"$ziran/build/bin/zi2c"}
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 
-"$ziran/build/bin/zi2c" --no-main --root "$root" \
+"$compiler" --no-main --root "$root" \
     --module-path "$ziran/std" -o "$work/generated" \
     "$root/client.zi" "$root/transaction.zi" "$root/sync.zi" \
     "$root/social.zi" "$root/account.zi"
