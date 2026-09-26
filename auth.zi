@@ -1,0 +1,166 @@
+// Portable challenge/login protocol. The application owns keys and the host
+// owns HTTP; neither is stored here.
+#import "wire"
+#import "json_scan"
+#import "byte_text_linux"
+
+AuthResult :: enum {
+    AUTH_OK :: 0
+    AUTH_INVALID_URL :: 1
+    AUTH_NO_ACCOUNT :: 2
+    AUTH_PAYLOAD_FAILED :: 3
+    AUTH_CHALLENGE_FAILED :: 4
+    AUTH_SIGN_FAILED :: 5
+    AUTH_REQUEST_FAILED :: 6
+    AUTH_FAILED :: 7
+}
+
+using AuthResult;
+
+Identity :: struct {
+    account_id: string
+    public_key: string
+    client_id: string
+    signing_context: *void
+}
+
+Session :: struct {
+    token: [4096]u8
+    expires_in_seconds: s64
+    server_time: s64
+    expires_at_local: s64
+}
+
+DigestBody :: #type (body: string, output: []u8) -> bool #c_call;
+SignMessage :: #type (context: *void, message: string,
+    output: []u8) -> bool #c_call;
+
+ValidJson :: (json: string) -> bool {
+    end := ValueEnd(json, 0, 0)
+    return end >= 0 && Space(json, end) == cast(s32)json.count
+}
+
+FieldText :: (json: string, name: string, output: []u8) -> bool {
+    if output.count == 0 || !ValidJson(json) {
+        return false
+    }
+    output[0] = cast(u8)0
+    at := FieldAt(json, 0, name)
+    span := ReadString(json, at)
+    if !span.valid || span.end <= span.start ||
+        cast(s64)(span.end - span.start) >= output.count {
+        return false
+    }
+    index: s32 = 0
+    while index < span.end - span.start {
+        byte := json[span.start + index]
+        if byte < cast(u8)33 || byte >= cast(u8)127 ||
+            byte == cast(u8)92 {
+            return false
+        }
+        output[index] = byte
+        index += 1
+    }
+    output[index] = cast(u8)0
+    return true
+}
+
+FieldNumber :: (json: string, name: string, fallback: s64) -> s64 {
+    at := FieldAt(json, 0, name)
+    number := ReadNumber(json, at)
+    if !number.valid || number.value < 0 ||
+        number.value > 9007199254740991.0 {
+        return fallback
+    }
+    return cast(s64)number.value
+}
+
+HexText :: (text: string, digits: s64) -> bool {
+    if cast(s64)text.count != digits {
+        return false
+    }
+    index: s64 = 0
+    while index < digits {
+        byte := text[index]
+        if !((byte >= cast(u8)48 && byte <= cast(u8)57) ||
+            (byte >= cast(u8)65 && byte <= cast(u8)70) ||
+            (byte >= cast(u8)97 && byte <= cast(u8)102)) {
+            return false
+        }
+        index += 1
+    }
+    return true
+}
+
+#scope_export
+#program_export
+PrepareLogin :: (identity: Identity, challenge_json: string,
+    digest: DigestBody, signer: SignMessage,
+    body: []u8, signature: []u8) -> AuthResult {
+    if body.count > 0 {
+        body[0] = cast(u8)0
+    }
+    if signature.count > 0 {
+        signature[0] = cast(u8)0
+    }
+    if !HexText(identity.account_id, 64) ||
+        identity.public_key.count == 0 {
+        return cast(AuthResult)AUTH_NO_ACCOUNT
+    }
+    if identity.client_id.count == 0 || body.count == 0 ||
+        signature.count < 4841 {
+        return cast(AuthResult)AUTH_PAYLOAD_FAILED
+    }
+
+    nonce: [65]u8
+    if !FieldText(challenge_json, "nonce", nonce[:]) ||
+        !HexText(TextFromCString(*nonce[0]), 64) {
+        return cast(AuthResult)AUTH_CHALLENGE_FAILED
+    }
+    if !BuildLoginBody(identity.account_id, identity.client_id,
+        identity.public_key, body) {
+        return cast(AuthResult)AUTH_PAYLOAD_FAILED
+    }
+
+    body_hash: [65]u8
+    body_hash[0] = cast(u8)0
+    if !digest(TextFromCString(*body[0]), body_hash[:]) ||
+        !HexText(TextFromCString(*body_hash[0]), 64) {
+        return cast(AuthResult)AUTH_SIGN_FAILED
+    }
+    message: [256]u8
+    if !BuildLoginMessageHash(TextFromCString(*body_hash[0]),
+        TextFromCString(*nonce[0]), message[:]) {
+        return cast(AuthResult)AUTH_SIGN_FAILED
+    }
+    if !signer(identity.signing_context,
+        TextFromCString(*message[0]), signature) ||
+        !HexText(TextFromCString(*signature[0]), 4840) {
+        signature[0] = cast(u8)0
+        return cast(AuthResult)AUTH_SIGN_FAILED
+    }
+    return cast(AuthResult)AUTH_OK
+}
+
+#scope_export
+#program_export
+AcceptLogin :: (status: s32, response_json: string,
+    session: *Session) -> AuthResult {
+    if session == null {
+        return cast(AuthResult)AUTH_PAYLOAD_FAILED
+    }
+    session.* = Session.{}
+    if status == 401 {
+        return cast(AuthResult)AUTH_FAILED
+    }
+    if status < 200 || status >= 300 {
+        return cast(AuthResult)AUTH_REQUEST_FAILED
+    }
+    if !FieldText(response_json, "auth_token", session.token[:]) {
+        return cast(AuthResult)AUTH_PAYLOAD_FAILED
+    }
+    session.expires_in_seconds = FieldNumber(response_json,
+        "expires_in_seconds", 3600)
+    session.server_time = FieldNumber(response_json, "server_time", 0)
+    return cast(AuthResult)AUTH_OK
+}

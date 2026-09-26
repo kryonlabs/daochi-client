@@ -1,0 +1,197 @@
+// Daochi server URLs use HTTPS except for loopback and private LAN hosts.
+#import "byte_text_linux"
+
+StartsWith :: (value: string, prefix: string) -> bool {
+    if value.count < prefix.count {
+        return false
+    }
+    index: s64 = 0
+    while index < cast(s64)prefix.count {
+        if value[index] != prefix[index] {
+            return false
+        }
+        index += 1
+    }
+    return true
+}
+
+HostBoundary :: (authority: string, index: s64) -> bool {
+    if index >= cast(s64)authority.count {
+        return true
+    }
+    byte := authority[index]
+    return byte == cast(u8)58 || byte == cast(u8)47 ||
+        byte == cast(u8)63 || byte == cast(u8)35
+}
+
+PrivateIpv4Authority :: (authority: string) -> bool {
+    octets: [4]s32
+    position: s64 = 0
+    part: s32 = 0
+    while part < 4 {
+        value: s32 = 0
+        digits: s32 = 0
+        while position < cast(s64)authority.count &&
+            authority[position] >= cast(u8)48 &&
+            authority[position] <= cast(u8)57 {
+            value = value * 10 + cast(s32)(authority[position] - cast(u8)48)
+            digits += 1
+            if value > 255 || digits > 3 {
+                return false
+            }
+            position += 1
+        }
+        if digits == 0 {
+            return false
+        }
+        octets[part] = value
+        if part < 3 {
+            if position >= cast(s64)authority.count ||
+                authority[position] != cast(u8)46 {
+                return false
+            }
+            position += 1
+        }
+        part += 1
+    }
+    if !HostBoundary(authority, position) {
+        return false
+    }
+    return octets[0] == 10 ||
+        (octets[0] == 172 && octets[1] >= 16 && octets[1] <= 31) ||
+        (octets[0] == 192 && octets[1] == 168) ||
+        (octets[0] == 169 && octets[1] == 254)
+}
+
+LocalAuthority :: (authority: string) -> bool {
+    if authority.count == 0 {
+        return false
+    }
+    if StartsWith(authority, "localhost") && HostBoundary(authority, 9) {
+        return true
+    }
+    if StartsWith(authority, "127.0.0.1") && HostBoundary(authority, 9) {
+        return true
+    }
+    if StartsWith(authority, "10.0.2.2") && HostBoundary(authority, 8) {
+        return true
+    }
+    return PrivateIpv4Authority(authority)
+}
+
+SafeUrlBytes :: (value: string) -> bool {
+    index: s64 = 0
+    while index < cast(s64)value.count {
+        byte := value[index]
+        if byte <= cast(u8)32 || byte >= cast(u8)127 {
+            return false
+        }
+        index += 1
+    }
+    return true
+}
+
+#scope_export
+#program_export
+UrlValid :: (url: string) -> bool {
+    if !SafeUrlBytes(url) {
+        return false
+    }
+    if StartsWith(url, "https://") {
+        return url.count > 8
+    }
+    if StartsWith(url, "http://") {
+        return LocalAuthority(url[7:])
+    }
+    return LocalAuthority(url)
+}
+
+#scope_export
+#program_export
+NormalizeUrl :: (input: string, output: []u8) -> bool {
+    if output.count == 0 {
+        return false
+    }
+    output[0] = cast(u8)0
+    if !UrlValid(input) {
+        return false
+    }
+    cursor: s64 = 0
+    if !StartsWith(input, "https://") &&
+        !StartsWith(input, "http://") {
+        if !WriteUrlText(output, *cursor, "http://") {
+            return false
+        }
+    }
+    if !WriteUrlText(output, *cursor, input) {
+        output[0] = cast(u8)0
+        return false
+    }
+    return true
+}
+
+WriteUrlText :: (output: []u8, cursor: *s64, value: string) -> bool {
+    if cursor.* < 0 || value.count >= output.count - cursor.* {
+        return false
+    }
+    index: s64 = 0
+    while index < cast(s64)value.count {
+        output[cursor.*] = value[index]
+        cursor.* += 1
+        index += 1
+    }
+    output[cursor.*] = cast(u8)0
+    return true
+}
+
+#scope_export
+#program_export
+JoinUrl :: (base_url: string, path: string, output: []u8) -> bool {
+    if output.count == 0 {
+        return false
+    }
+    output[0] = cast(u8)0
+    if path.count == 0 || path[0] != cast(u8)47 ||
+        !UrlValid(base_url) {
+        return false
+    }
+    end := cast(s64)base_url.count
+    while end > 0 && base_url[end - 1] == cast(u8)47 {
+        end -= 1
+    }
+    cursor: s64 = 0
+    if !WriteUrlText(output, *cursor, base_url[0:end]) ||
+        !WriteUrlText(output, *cursor, path) {
+        output[0] = cast(u8)0
+        return false
+    }
+    return true
+}
+
+#scope_export
+#program_export
+JoinWebSocketUrl :: (base_url: string, path: string,
+    output: []u8) -> bool {
+    if output.count == 0 {
+        return false
+    }
+    output[0] = cast(u8)0
+    http_url: [2048]u8
+    if !JoinUrl(base_url, path, http_url[:]) {
+        return false
+    }
+    url := TextFromCString(*http_url[0])
+    cursor: s64 = 0
+    complete := false
+    if StartsWith(url, "https://") {
+        complete = WriteUrlText(output, *cursor, "wss://") &&
+            WriteUrlText(output, *cursor, url[8:])
+    } else if StartsWith(url, "http://") {
+        complete = WriteUrlText(output, *cursor, "ws://") &&
+            WriteUrlText(output, *cursor, url[7:])
+    }
+    if !complete {
+        output[0] = cast(u8)0
+    }
+    return complete
+}
