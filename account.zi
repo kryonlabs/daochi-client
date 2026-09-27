@@ -27,26 +27,20 @@ BuildDeleteBody :: (account_id: string, public_key: string,
     return true
 }
 
-#scope_export
-#program_export
-DeleteAccount :: (client: Client) -> AuthResult {
-    challenge: [4096]u8
-    challenged := FetchChallengeJson(client, challenge[:])
-    if challenged != cast(AuthResult)AuthResult.AUTH_OK {
-        return challenged
-    }
+// Shared signed deletion preparation for blocking and polled hosts.
+PrepareDelete :: (client: Client, challenge: string,
+    body: []u8, signature: []u8) -> AuthResult {
     nonce: [65]u8
-    if !FieldText(TextUntilNul(challenge[:]), "nonce", nonce[:]) ||
+    if !FieldText(challenge, "nonce", nonce[:]) ||
         !Hex64(TextUntilNul(nonce[:])) {
         return cast(AuthResult)AuthResult.AUTH_CHALLENGE_FAILED
     }
-    body: [4096]u8
     if !BuildDeleteBody(client.identity.account_id,
-        client.identity.public_key, body[:]) {
+        client.identity.public_key, body) {
         return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
     }
     body_hash: [65]u8
-    if !client.digest(TextUntilNul(body[:]), body_hash[:]) ||
+    if !client.digest(TextUntilNul(body), body_hash[:]) ||
         !Hex64(TextUntilNul(body_hash[:])) {
         return cast(AuthResult)AuthResult.AUTH_SIGN_FAILED
     }
@@ -55,11 +49,28 @@ DeleteAccount :: (client: Client) -> AuthResult {
         TextUntilNul(nonce[:]), message[:]) {
         return cast(AuthResult)AuthResult.AUTH_SIGN_FAILED
     }
-    signature: [4841]u8
     if !client.signer(client.identity.signing_context,
-        TextUntilNul(message[:]), signature[:]) ||
-        !HexText(TextUntilNul(signature[:]), 4840) {
+        TextUntilNul(message[:]), signature) ||
+        !HexText(TextUntilNul(signature), 4840) {
         return cast(AuthResult)AuthResult.AUTH_SIGN_FAILED
+    }
+    return cast(AuthResult)AuthResult.AUTH_OK
+}
+
+#scope_export
+#program_export
+DeleteAccount :: (client: Client) -> AuthResult {
+    challenge: [4096]u8
+    challenged := FetchChallengeJson(client, challenge[:])
+    if challenged != cast(AuthResult)AuthResult.AUTH_OK {
+        return challenged
+    }
+    body: [4096]u8
+    signature: [4841]u8
+    prepared := PrepareDelete(client, TextUntilNul(challenge[:]),
+        body[:], signature[:])
+    if prepared != cast(AuthResult)AuthResult.AUTH_OK {
+        return prepared
     }
     server: [512]u8
     url: [768]u8

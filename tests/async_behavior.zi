@@ -1,5 +1,6 @@
 #import "async_client"
 #import "async_sync"
+#import "async_account"
 #import "client"
 #import "sync"
 #import "auth"
@@ -11,6 +12,8 @@ calls: s32;
 challenges: s32;
 logins: s32;
 registrations: s32;
+deletions: s32;
+delete_status: s32;
 syncs: s32;
 polls: s32;
 cancels: s32;
@@ -106,6 +109,19 @@ Start :: (context: *void, request: HttpRequest, output: []u8) -> bool {
         }
         return CopyCString("{\"auth_token\":\"token\",\"expires_in_seconds\":1800,\"server_time\":1700000000}", output)
     }
+    if Contains(request.url, "/account/delete") {
+        deletions += 1
+        if request.method != "POST" || request.token.count != 0 ||
+            request.headers.count != 2 ||
+            request.headers[0].name != "X-Daochi-User" ||
+            request.headers[1].name != "X-Daochi-Signature" ||
+            request.headers[1].value.count != 4840 ||
+            !Contains(request.body, "\"public_key\":\"public-key\"") {
+            bad_request = true
+        }
+        status = delete_status
+        return CopyCString("{}", output)
+    }
     if request.token != "token" || request.method != "POST" {
         bad_request = true
     }
@@ -161,6 +177,8 @@ Reset :: () {
     challenges = 0
     logins = 0
     registrations = 0
+    deletions = 0
+    delete_status = 200
     syncs = 0
     polls = 0
     cancels = 0
@@ -249,6 +267,59 @@ main :: () -> s32 {
     if cancels != 1 || active || !PollSync(*pending) || bad_request ||
         pending.result != cast(AuthResult)AuthResult.AUTH_REQUEST_FAILED {
         return 8
+    }
+    trial = 0
+    while trial < 3 {
+        Reset()
+        if trial == 1 {
+            delete_status = 403
+        }
+        if trial == 2 {
+            delete_status = 500
+        }
+        deletion: PendingDeletion
+        if !BeginDeletion(*deletion, client, transport) ||
+            BeginDeletion(*deletion, client, transport) ||
+            PollDeletion(*deletion) || calls != 1 {
+            return 9
+        }
+        steps: s32 = 0
+        while !PollDeletion(*deletion) && steps < 10 {
+            steps += 1
+        }
+        if steps >= 10 || bad_request || active || calls != 2 ||
+            challenges != 1 || deletions != 1 || logins != 0 ||
+            account_signs != 1 {
+            return 10
+        }
+        expected := cast(AuthResult)AuthResult.AUTH_OK
+        if trial == 1 {
+            expected = cast(AuthResult)AuthResult.AUTH_FAILED
+        }
+        if trial == 2 {
+            expected = cast(AuthResult)AuthResult.AUTH_REQUEST_FAILED
+        }
+        if deletion.result != expected {
+            return 20 + trial * 10 + cast(s32)deletion.result
+        }
+        trial += 1
+    }
+    trial = 0
+    while trial < 2 {
+        Reset()
+        deletion: PendingDeletion
+        unused BeginDeletion(*deletion, client, transport)
+        if trial == 1 {
+            unused PollDeletion(*deletion)
+            unused PollDeletion(*deletion)
+        }
+        CancelDeletion(*deletion)
+        CancelDeletion(*deletion)
+        if cancels != 1 || active || !PollDeletion(*deletion) ||
+            bad_request || deletion.result != cast(AuthResult)AuthResult.AUTH_REQUEST_FAILED {
+            return 12
+        }
+        trial += 1
     }
     return 0
 }

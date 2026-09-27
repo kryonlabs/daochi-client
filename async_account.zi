@@ -1,0 +1,149 @@
+// Signed account deletion advanced without blocking the host event loop.
+#import "account"
+#import "async_client"
+#import "client"
+#import "auth"
+#import "url"
+#import "wire"
+#import "net_http"
+#import "text_buffer"
+
+PendingDeletion :: struct {
+    client: Client
+    transport: AsyncTransport
+    server: [512]u8
+    address: [768]u8
+    challenge: [4096]u8
+    body: [4096]u8
+    signature: [4841]u8
+    headers: [2]HttpHeader
+    response: [4096]u8
+    status: s32
+    deleting: bool
+    waiting: bool
+    done: bool
+    result: AuthResult
+}
+
+FinishDeletion :: (pending: *PendingDeletion, result: AuthResult) {
+    pending.waiting = false
+    pending.done = true
+    pending.result = result
+}
+
+BeginDeletion :: (pending: *PendingDeletion, client: Client,
+    transport: AsyncTransport) -> bool {
+    if pending == null || pending.waiting || transport.start == null ||
+        transport.poll == null || transport.cancel == null {
+        return false
+    }
+    pending.* = PendingDeletion.{}
+    pending.client = client
+    pending.transport = transport
+    if !NormalizeUrl(client.server_url, pending.server[:]) {
+        FinishDeletion(pending, cast(AuthResult)AuthResult.AUTH_INVALID_URL)
+        return false
+    }
+    path: [128]u8
+    if !BuildChallengePath(client.identity.account_id, path[:]) {
+        FinishDeletion(pending, cast(AuthResult)AuthResult.AUTH_NO_ACCOUNT)
+        return false
+    }
+    if !JoinUrl(TextUntilNul(pending.server[:]), TextUntilNul(path[:]),
+        pending.address[:]) {
+        FinishDeletion(pending, cast(AuthResult)AuthResult.AUTH_INVALID_URL)
+        return false
+    }
+    request: HttpRequest
+    request.method = "GET"
+    request.url = TextUntilNul(pending.address[:])
+    request.accept = "application/json"
+    if !transport.start(transport.context, request, pending.challenge[:]) {
+        FinishDeletion(pending, cast(AuthResult)AuthResult.AUTH_CHALLENGE_FAILED)
+        return false
+    }
+    pending.waiting = true
+    return true
+}
+
+PollDeletion :: (pending: *PendingDeletion) -> bool {
+    if pending == null || pending.done {
+        return true
+    }
+    if !pending.waiting {
+        FinishDeletion(pending, cast(AuthResult)AuthResult.AUTH_REQUEST_FAILED)
+        return true
+    }
+    polled := pending.transport.poll(pending.transport.context,
+        *pending.status)
+    if polled < 0 {
+        return false
+    }
+    pending.waiting = false
+    if polled == 0 {
+        result := cast(AuthResult)AuthResult.AUTH_CHALLENGE_FAILED
+        if pending.deleting {
+            result = cast(AuthResult)AuthResult.AUTH_REQUEST_FAILED
+        }
+        FinishDeletion(pending, result)
+        return true
+    }
+    if pending.status == 401 || (pending.deleting && pending.status == 403) {
+        FinishDeletion(pending, cast(AuthResult)AuthResult.AUTH_FAILED)
+        return true
+    }
+    if pending.deleting {
+        result := cast(AuthResult)AuthResult.AUTH_REQUEST_FAILED
+        if pending.status >= 200 && pending.status < 300 {
+            result = cast(AuthResult)AuthResult.AUTH_OK
+        }
+        FinishDeletion(pending, result)
+        return true
+    }
+    if pending.status != 200 {
+        FinishDeletion(pending, cast(AuthResult)AuthResult.AUTH_CHALLENGE_FAILED)
+        return true
+    }
+    prepared := PrepareDelete(pending.client,
+        TextUntilNul(pending.challenge[:]), pending.body[:],
+        pending.signature[:])
+    if prepared != cast(AuthResult)AuthResult.AUTH_OK {
+        FinishDeletion(pending, prepared)
+        return true
+    }
+    if !JoinUrl(TextUntilNul(pending.server[:]),
+        "/api/v1/account/delete", pending.address[:]) {
+        FinishDeletion(pending, cast(AuthResult)AuthResult.AUTH_INVALID_URL)
+        return true
+    }
+    pending.headers[0].name = "X-Daochi-User"
+    pending.headers[0].value = pending.client.identity.account_id
+    pending.headers[1].name = "X-Daochi-Signature"
+    pending.headers[1].value = TextUntilNul(pending.signature[:])
+    request: HttpRequest
+    request.method = "POST"
+    request.url = TextUntilNul(pending.address[:])
+    request.accept = "application/json"
+    request.content_type = "application/json"
+    request.body = TextUntilNul(pending.body[:])
+    request.headers = pending.headers[:]
+    pending.status = 0
+    pending.deleting = true
+    if !pending.transport.start(pending.transport.context, request,
+        pending.response[:]) {
+        FinishDeletion(pending, cast(AuthResult)AuthResult.AUTH_REQUEST_FAILED)
+        return true
+    }
+    pending.waiting = true
+    return false
+}
+
+CancelDeletion :: (pending: *PendingDeletion) {
+    if pending == null || pending.done {
+        return
+    }
+    if pending.waiting {
+        pending.transport.cancel(pending.transport.context)
+    }
+    FinishDeletion(pending, cast(AuthResult)AuthResult.AUTH_REQUEST_FAILED)
+}
