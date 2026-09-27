@@ -12,6 +12,8 @@ The protocol modules currently provide:
 - canonical device registration and protocol v6 transaction messages
   (`transaction.zi`);
 - signed device registration and protocol v6 sync requests (`sync.zi`);
+- polled login, bearer requests, and signed sync operations
+  (`async_client.zi`, `async_sync.zi`);
 - alias and friend requests, actions, lists, and stats (`social.zi`);
 - challenge signed account deletion without transmitting a key backup
   (`account.zi`).
@@ -33,6 +35,18 @@ with both the account and device keys. The app owns the payload format and
 merges the response. A native host can adapt `SendRequest` to Ziran's curl HTTP
 module and `ReceiveEvent` to its bounded curl WebSocket module. Browser and
 Android hosts must implement those host boundaries before those builds sync.
+
+Event loops can use `BeginRequest`/`PollRequest` and `BeginSync`/`PollSync`
+with `AsyncTransport`. Its start callback copies the request metadata and
+retains the caller's bounded output buffer; poll returns `-1` while pending,
+`0` for transport failure, or `1` with the HTTP status when complete. Every
+completed response must be NUL terminated. Cancel releases all transport
+references to that output buffer before returning. Keep the pending operation,
+session, client identity, signing contexts, body, and extra header strings alive
+until completion or cancellation. Each pending operation has its own transport
+context. `CancelRequest` and `CancelSync` release an active transfer and finish
+with `AUTH_REQUEST_FAILED`. Both request modes share the same one-login retry
+after a `401`; sync modes share the exact registration and transaction builders.
 
 `sh tests/run.sh` checks the library using the sibling `ziran` checkout,
 including portable `.zib` URL and wire tests. The wire test also checks a

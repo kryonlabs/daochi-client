@@ -1,0 +1,254 @@
+#import "async_client"
+#import "async_sync"
+#import "client"
+#import "sync"
+#import "auth"
+#import "net_http"
+#import "text_buffer"
+#import "c_string"
+
+calls: s32;
+challenges: s32;
+logins: s32;
+registrations: s32;
+syncs: s32;
+polls: s32;
+cancels: s32;
+account_signs: s32;
+device_signs: s32;
+nonces: s32;
+status: s32;
+reject_syncs: s32;
+bad_request: bool;
+active: bool;
+fail_transport: bool;
+
+Contains :: (text: string, part: string) -> bool {
+    if part.count > text.count {
+        return false
+    }
+    offset: s64 = 0
+    while offset <= cast(s64)text.count - cast(s64)part.count {
+        index: s64 = 0
+        while index < cast(s64)part.count && text[offset + index] == part[index] {
+            index += 1
+        }
+        if index == cast(s64)part.count {
+            return true
+        }
+        offset += 1
+    }
+    return false
+}
+
+HexFill :: (output: []u8, count: s32, byte: u8) -> bool {
+    if cast(s64)output.count <= cast(s64)count {
+        return false
+    }
+    index: s32 = 0
+    while index < count {
+        output[index] = byte
+        index += 1
+    }
+    output[count] = cast(u8)0
+    return true
+}
+
+Digest :: (body: string, output: []u8) -> bool {
+    return body.count > 0 && HexFill(output, 64, cast(u8)102)
+}
+
+SignAccount :: (context: *void, message: string, output: []u8) -> bool {
+    unused context
+    account_signs += 1
+    if !Contains(message, "daochi-") {
+        bad_request = true
+    }
+    return HexFill(output, 4840, cast(u8)97)
+}
+
+SignDevice :: (context: *void, message: string, output: []u8) -> bool {
+    unused context
+    device_signs += 1
+    if !Contains(message, "daochi-tx-v1\n6\n") {
+        bad_request = true
+    }
+    return HexFill(output, 128, cast(u8)100)
+}
+
+Nonce :: (context: *void, output: []u8) -> bool {
+    unused context
+    nonces += 1
+    return HexFill(output, 64, cast(u8)(48 + nonces))
+}
+
+Start :: (context: *void, request: HttpRequest, output: []u8) -> bool {
+    unused context
+    if active {
+        bad_request = true
+        return false
+    }
+    active = true
+    calls += 1
+    polls = 0
+    status = 200
+    if Contains(request.url, "/sync/challenge?") {
+        challenges += 1
+        if request.method != "GET" {
+            bad_request = true
+        }
+        return CopyCString("{\"nonce\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\"}", output)
+    }
+    if Contains(request.url, "/sync/login") {
+        logins += 1
+        if request.headers.count != 2 || request.headers[1].value.count != 4840 {
+            bad_request = true
+        }
+        return CopyCString("{\"auth_token\":\"token\",\"expires_in_seconds\":1800,\"server_time\":1700000000}", output)
+    }
+    if request.token != "token" || request.method != "POST" {
+        bad_request = true
+    }
+    if Contains(request.url, "/account/devices") {
+        registrations += 1
+        if !Contains(request.body, "\"app_id\":\"inbe\"") ||
+            !Contains(request.body, "\"expires_at\":1700000300") {
+            bad_request = true
+        }
+        return CopyCString("{}", output)
+    }
+    syncs += 1
+    if request.headers.count != 3 || request.headers[2].name != "X-Daochi-Tx" ||
+        !Contains(request.headers[2].value, "\"protocol_version\":6") ||
+        !Contains(request.headers[2].value, "\"device_signature\":\"dddd") ||
+        request.body != "{\"protocol_version\":6}" {
+        bad_request = true
+    }
+    if reject_syncs > 0 {
+        reject_syncs -= 1
+        status = 401
+        return CopyCString("{}", output)
+    }
+    return CopyCString("{\"server_version\":7}", output)
+}
+
+Poll :: (context: *void, output_status: *s32) -> s32 {
+    unused context
+    if !active {
+        bad_request = true
+        return 0
+    }
+    polls += 1
+    if polls == 1 {
+        return -1
+    }
+    active = false
+    output_status[0] = status
+    return ifx (fail_transport) then (0) else (1)
+}
+
+Cancel :: (context: *void) {
+    unused context
+    if !active {
+        bad_request = true
+    }
+    active = false
+    cancels += 1
+}
+
+Reset :: () {
+    calls = 0
+    challenges = 0
+    logins = 0
+    registrations = 0
+    syncs = 0
+    polls = 0
+    cancels = 0
+    account_signs = 0
+    device_signs = 0
+    nonces = 0
+    status = 0
+    reject_syncs = 0
+    bad_request = false
+    active = false
+    fail_transport = false
+}
+
+#program_export
+main :: () -> s32 {
+    account: [65]u8
+    device_key: [65]u8
+    unused HexFill(account[:], 64, cast(u8)97)
+    unused HexFill(device_key[:], 64, cast(u8)98)
+    client: Client
+    client.server_url = "http://127.0.0.1:8080"
+    client.app_id = "inbe"
+    client.identity.account_id = TextUntilNul(account[:])
+    client.identity.public_key = "public-key"
+    client.identity.client_id = "client-1"
+    client.digest = Digest
+    client.signer = SignAccount
+    device: Device
+    device.key_id = TextUntilNul(device_key[:])
+    device.public_key_hex = TextUntilNul(device_key[:])
+    device.signer = SignDevice
+    transport: AsyncTransport
+    transport.start = Start
+    transport.poll = Poll
+    transport.cancel = Cancel
+    session: Session
+    pending: PendingSync
+    output: [256]u8
+    trial: s32 = 0
+    while trial < 3 {
+        Reset()
+        reject_syncs = trial
+        session = Session.{}
+        pending = PendingSync.{}
+        if !BeginSync(*pending, client, *session, device, 1000, null,
+            Nonce, transport, "{\"protocol_version\":6}", output[:]) {
+            return 1
+        }
+        if PollSync(*pending) || calls != 1 {
+            return 2
+        }
+        limit: s32 = 0
+        while !PollSync(*pending) && limit < 30 {
+            limit += 1
+        }
+        if limit >= 30 || bad_request || active || registrations != 1 ||
+            device_signs != 1 || nonces != 3 {
+            return 3
+        }
+        if trial == 0 {
+            if pending.result != cast(AuthResult)AuthResult.AUTH_OK ||
+                pending.status != 200 || calls != 4 || account_signs != 3 ||
+                TextUntilNul(output[:]) != "{\"server_version\":7}" {
+                return 4
+            }
+        } else {
+            if challenges != 2 || logins != 2 || syncs != 2 || calls != 7 {
+                return 5
+            }
+            if trial == 1 && pending.result != cast(AuthResult)AuthResult.AUTH_OK {
+                return 6
+            }
+            if trial == 2 && (pending.result != cast(AuthResult)AuthResult.AUTH_FAILED ||
+                pending.status != 401 || session.token[0] != cast(u8)0) {
+                return 7
+            }
+        }
+        trial += 1
+    }
+    Reset()
+    session = Session.{}
+    pending = PendingSync.{}
+    unused BeginSync(*pending, client, *session, device, 1000, null,
+        Nonce, transport, "{\"protocol_version\":6}", output[:])
+    CancelSync(*pending)
+    if cancels != 1 || active || !PollSync(*pending) || bad_request ||
+        pending.result != cast(AuthResult)AuthResult.AUTH_REQUEST_FAILED {
+        return 8
+    }
+    return 0
+}

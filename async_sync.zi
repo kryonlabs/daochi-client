@@ -1,0 +1,128 @@
+// The same v6 registration and signed transaction as Sync, advanced by polls.
+#import "async_client"
+#import "client"
+#import "auth"
+#import "sync"
+#import "net_http"
+#import "text_buffer"
+
+PendingSync :: struct {
+    request: PendingRequest
+    client: Client
+    session: *Session
+    transport: AsyncTransport
+    device: Device
+    now: s64
+    random_context: *void
+    random: RandomNonce
+    body: string
+    output: []u8
+    registration: [6144]u8
+    registration_response: [2048]u8
+    transaction_header: [8192]u8
+    stage: s32
+    done: bool
+    result: AuthResult
+    status: s32
+}
+
+FinishSync :: (pending: *PendingSync, result: AuthResult) {
+    pending.result = result
+    pending.done = true
+}
+
+#scope_export
+BeginSync :: (pending: *PendingSync, client: Client, session: *Session,
+    device: Device, now: s64, random_context: *void, random: RandomNonce,
+    transport: AsyncTransport, body: string, output: []u8) -> bool {
+    if pending == null || session == null || pending.request.waiting ||
+        transport.start == null || transport.poll == null || transport.cancel == null {
+        return false
+    }
+    pending.* = PendingSync.{}
+    pending.client = client
+    pending.session = session
+    pending.device = device
+    pending.now = now
+    pending.random_context = random_context
+    pending.random = random
+    pending.transport = transport
+    pending.body = body
+    pending.output = output
+    if output.count == 0 || body.count == 0 {
+        FinishSync(pending, cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED)
+        return true
+    }
+    output[0] = cast(u8)0
+    pending.stage = 1
+    if !BeginSession(*pending.request, client, session, now, transport) {
+        FinishSync(pending, cast(AuthResult)AuthResult.AUTH_REQUEST_FAILED)
+    }
+    return true
+}
+
+#scope_export
+PollSync :: (pending: *PendingSync) -> bool {
+    if pending == null {
+        return true
+    }
+    if pending.done {
+        return true
+    }
+    if !PollRequest(*pending.request) {
+        return false
+    }
+    if pending.stage == 3 {
+        pending.status = pending.request.status
+    }
+    if pending.request.result != cast(AuthResult)AuthResult.AUTH_OK {
+        FinishSync(pending, pending.request.result)
+        return true
+    }
+    if pending.stage == 1 {
+        prepared := PrepareDeviceRegistration(pending.client, pending.session,
+            pending.device, pending.now, pending.random_context,
+            pending.random, pending.registration[:])
+        if prepared != cast(AuthResult)AuthResult.AUTH_OK {
+            FinishSync(pending, prepared)
+            return true
+        }
+        extra: [1]HttpHeader
+        pending.stage = 2
+        if !BeginRequest(*pending.request, pending.client, pending.session,
+            pending.now, pending.transport, "POST", "/api/v1/account/devices",
+            TextUntilNul(pending.registration[:]), pending.registration_response[:],
+            extra[0:0]) {
+            FinishSync(pending, cast(AuthResult)AuthResult.AUTH_REQUEST_FAILED)
+        }
+    } else if pending.stage == 2 {
+        prepared := PrepareSyncHeader(pending.client, pending.session,
+            pending.device, pending.now, pending.random_context,
+            pending.random, pending.body, pending.transaction_header[:])
+        if prepared != cast(AuthResult)AuthResult.AUTH_OK {
+            FinishSync(pending, prepared)
+            return true
+        }
+        extra: [1]HttpHeader
+        extra[0].name = "X-Daochi-Tx"
+        extra[0].value = TextUntilNul(pending.transaction_header[:])
+        pending.stage = 3
+        if !BeginRequest(*pending.request, pending.client, pending.session,
+            pending.now, pending.transport, "POST", "/api/v1/sync",
+            pending.body, pending.output, extra[:]) {
+            FinishSync(pending, cast(AuthResult)AuthResult.AUTH_REQUEST_FAILED)
+        }
+    } else {
+        FinishSync(pending, pending.request.result)
+    }
+    return pending.done
+}
+
+#scope_export
+CancelSync :: (pending: *PendingSync) {
+    if pending == null {
+        return
+    }
+    CancelRequest(*pending.request)
+    FinishSync(pending, cast(AuthResult)AuthResult.AUTH_REQUEST_FAILED)
+}

@@ -1,0 +1,284 @@
+// A bounded request operation advanced by the host's frame/event loop.
+// Request data, identity, session, and output remain caller-owned until done.
+#import "client"
+#import "auth"
+#import "url"
+#import "wire"
+#import "net_http"
+#import "text_buffer"
+
+StartTransfer :: #type (context: *void, request: HttpRequest,
+    output: []u8) -> bool;
+PollTransfer :: #type (context: *void, status: *s32) -> s32;
+CancelTransfer :: #type (context: *void) -> void;
+
+AsyncTransport :: struct {
+    context: *void
+    start: StartTransfer
+    poll: PollTransfer
+    cancel: CancelTransfer
+}
+
+PendingRequest :: struct {
+    client: Client
+    session: *Session
+    transport: AsyncTransport
+    now: s64
+    method: string
+    path: string
+    body: string
+    output: []u8
+    extra: [14]HttpHeader
+    extra_count: s32
+    headers: [16]HttpHeader
+    address: [2048]u8
+    challenge: [4096]u8
+    login_body: [4096]u8
+    signature: [4841]u8
+    login_response: [8192]u8
+    stage: s32
+    retries: s32
+    session_only: bool
+    waiting: bool
+    done: bool
+    result: AuthResult
+    status: s32
+}
+
+FinishRequest :: (pending: *PendingRequest, result: AuthResult) {
+    pending.result = result
+    pending.waiting = false
+    pending.done = true
+}
+
+StartPendingTransfer :: (pending: *PendingRequest, request: HttpRequest,
+    output: []u8, stage: s32) {
+    output[0] = cast(u8)0
+    pending.status = 0
+    pending.stage = stage
+    if !pending.transport.start(pending.transport.context, request, output) {
+        failure := cast(AuthResult)AuthResult.AUTH_REQUEST_FAILED
+        if stage == 1 {
+            failure = cast(AuthResult)AuthResult.AUTH_CHALLENGE_FAILED
+        }
+        FinishRequest(pending, failure)
+        return
+    }
+    pending.waiting = true
+}
+
+SetPendingAddress :: (pending: *PendingRequest, path: string) -> bool {
+    server: [512]u8
+    if !NormalizeUrl(pending.client.server_url, server[:]) ||
+        !JoinUrl(TextUntilNul(server[:]), path, pending.address[:]) {
+        FinishRequest(pending, cast(AuthResult)AuthResult.AUTH_INVALID_URL)
+        return false
+    }
+    return true
+}
+
+StartChallenge :: (pending: *PendingRequest) {
+    ClearSession(pending.session)
+    path: [128]u8
+    if !BuildChallengePath(pending.client.identity.account_id, path[:]) {
+        FinishRequest(pending, cast(AuthResult)AuthResult.AUTH_NO_ACCOUNT)
+        return
+    }
+    if !SetPendingAddress(pending, TextUntilNul(path[:])) {
+        return
+    }
+    request: HttpRequest
+    request.method = "GET"
+    request.url = TextUntilNul(pending.address[:])
+    request.accept = "application/json"
+    StartPendingTransfer(pending, request, pending.challenge[:], 1)
+}
+
+StartLogin :: (pending: *PendingRequest) {
+    result := PrepareLogin(pending.client.identity,
+        TextUntilNul(pending.challenge[:]), pending.client.digest,
+        pending.client.signer, pending.login_body[:], pending.signature[:])
+    if result != cast(AuthResult)AuthResult.AUTH_OK {
+        FinishRequest(pending, result)
+        return
+    }
+    if !SetPendingAddress(pending, "/api/v1/sync/login") {
+        return
+    }
+    pending.headers[0].name = "X-Daochi-User"
+    pending.headers[0].value = pending.client.identity.account_id
+    pending.headers[1].name = "X-Daochi-Signature"
+    pending.headers[1].value = TextUntilNul(pending.signature[:])
+    request: HttpRequest
+    request.method = "POST"
+    request.url = TextUntilNul(pending.address[:])
+    request.accept = "application/json"
+    request.content_type = "application/json"
+    request.body = TextUntilNul(pending.login_body[:])
+    request.headers = pending.headers[0:2]
+    StartPendingTransfer(pending, request, pending.login_response[:], 2)
+}
+
+StartBearer :: (pending: *PendingRequest) {
+    if !SetPendingAddress(pending, pending.path) {
+        return
+    }
+    pending.headers[0].name = "X-Daochi-User"
+    pending.headers[0].value = pending.client.identity.account_id
+    pending.headers[1].name = "X-Daochi-Client"
+    pending.headers[1].value = pending.client.identity.client_id
+    index: s32 = 0
+    while index < pending.extra_count {
+        pending.headers[index + 2] = pending.extra[index]
+        index += 1
+    }
+    request: HttpRequest
+    request.method = pending.method
+    request.url = TextUntilNul(pending.address[:])
+    request.token = TextUntilNul(pending.session.token[:])
+    request.accept = "application/json"
+    request.headers = pending.headers[0:pending.extra_count + 2]
+    if pending.body.count > 0 {
+        request.content_type = "application/json"
+        request.body = pending.body
+    }
+    StartPendingTransfer(pending, request, pending.output, 3)
+}
+
+InitializeRequest :: (pending: *PendingRequest, client: Client,
+    session: *Session, now: s64, transport: AsyncTransport) -> bool {
+    if pending == null || session == null || transport.start == null ||
+        transport.poll == null || transport.cancel == null {
+        return false
+    }
+    if pending.waiting {
+        return false
+    }
+    pending.* = PendingRequest.{}
+    pending.client = client
+    pending.session = session
+    pending.now = now
+    pending.transport = transport
+    pending.result = cast(AuthResult)AuthResult.AUTH_OK
+    return true
+}
+
+#scope_export
+BeginSession :: (pending: *PendingRequest, client: Client,
+    session: *Session, now: s64, transport: AsyncTransport) -> bool {
+    if !InitializeRequest(pending, client, session, now, transport) {
+        return false
+    }
+    pending.session_only = true
+    if TokenValid(session, now) {
+        FinishRequest(pending, cast(AuthResult)AuthResult.AUTH_OK)
+    } else {
+        StartChallenge(pending)
+    }
+    return true
+}
+
+#scope_export
+BeginRequest :: (pending: *PendingRequest, client: Client,
+    session: *Session, now: s64, transport: AsyncTransport,
+    method: string, path: string, body: string, output: []u8,
+    extra_headers: []HttpHeader) -> bool {
+    if !InitializeRequest(pending, client, session, now, transport) {
+        return false
+    }
+    if output.count == 0 || !MethodValid(method) || !PathValid(path) ||
+        extra_headers.count > 14 {
+        FinishRequest(pending, cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED)
+        return true
+    }
+    output[0] = cast(u8)0
+    pending.method = method
+    pending.path = path
+    pending.body = body
+    pending.output = output
+    pending.extra_count = cast(s32)extra_headers.count
+    index: s32 = 0
+    while index < pending.extra_count {
+        pending.extra[index] = extra_headers[index]
+        index += 1
+    }
+    if TokenValid(session, now) {
+        StartBearer(pending)
+    } else {
+        StartChallenge(pending)
+    }
+    return true
+}
+
+#scope_export
+PollRequest :: (pending: *PendingRequest) -> bool {
+    if pending == null {
+        return true
+    }
+    if pending.done || !pending.waiting {
+        return pending.done
+    }
+    state := pending.transport.poll(pending.transport.context, *pending.status)
+    if state < 0 {
+        return false
+    }
+    pending.waiting = false
+    if state == 0 {
+        failure := cast(AuthResult)AuthResult.AUTH_REQUEST_FAILED
+        if pending.stage == 1 {
+            failure = cast(AuthResult)AuthResult.AUTH_CHALLENGE_FAILED
+        }
+        FinishRequest(pending, failure)
+        return true
+    }
+    if pending.stage == 1 {
+        if pending.status != 200 {
+            failure := cast(AuthResult)AuthResult.AUTH_CHALLENGE_FAILED
+            if pending.status == 401 {
+                failure = cast(AuthResult)AuthResult.AUTH_FAILED
+            }
+            FinishRequest(pending, failure)
+        } else {
+            StartLogin(pending)
+        }
+    } else if pending.stage == 2 {
+        result := AcceptLogin(pending.status,
+            TextUntilNul(pending.login_response[:]), pending.session)
+        if result != cast(AuthResult)AuthResult.AUTH_OK {
+            FinishRequest(pending, result)
+        } else {
+            SetExpiry(pending.session, pending.now)
+            if pending.session_only {
+                FinishRequest(pending, result)
+            } else {
+                StartBearer(pending)
+            }
+        }
+    } else if pending.stage == 3 {
+        if pending.status >= 200 && pending.status < 300 {
+            FinishRequest(pending, cast(AuthResult)AuthResult.AUTH_OK)
+        } else if pending.status == 401 {
+            ClearSession(pending.session)
+            if pending.retries == 0 {
+                pending.retries = 1
+                StartChallenge(pending)
+            } else {
+                FinishRequest(pending, cast(AuthResult)AuthResult.AUTH_FAILED)
+            }
+        } else {
+            FinishRequest(pending, cast(AuthResult)AuthResult.AUTH_REQUEST_FAILED)
+        }
+    }
+    return pending.done
+}
+
+#scope_export
+CancelRequest :: (pending: *PendingRequest) {
+    if pending == null {
+        return
+    }
+    if pending.waiting {
+        pending.transport.cancel(pending.transport.context)
+    }
+    FinishRequest(pending, cast(AuthResult)AuthResult.AUTH_REQUEST_FAILED)
+}

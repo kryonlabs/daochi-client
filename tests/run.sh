@@ -29,6 +29,17 @@ for test in wire auth url client transaction sync social account events; do
     env -u DISPLAY -u WAYLAND_DISPLAY "$work/${test}_test"
 done
 
+"$compiler" --no-main --root "$root/tests" \
+    --module-path "$root" --module-path "$ziran/std" \
+    -o "$work/async" "$root/tests/async_behavior.zi"
+"${CC:-cc}" -std=c11 -O0 -Wall -Wextra -Werror \
+    -Wno-unused-function -Wno-unused-variable \
+    -ffunction-sections -fdata-sections -Wl,--gc-sections \
+    -I"$ziran/include" -I"$work/async" "$work/async"/*.c \
+    -o "$work/async_test"
+env -u DISPLAY -u WAYLAND_DISPLAY "$work/async_test"
+echo 'Daochi Ziran asynchronous request and signed sync passed'
+
 "$ziran_bin" bundle --root "$root/tests" \
     --module-path "$root" --module-path "$ziran/std" \
     --entry url_portable:Check -o "$work/url.zib" \

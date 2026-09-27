@@ -61,6 +61,52 @@ RegisterDevice :: (client: Client, session: *Session,
     if ready != cast(AuthResult)AuthResult.AUTH_OK {
         return ready
     }
+    body: [6144]u8
+    prepared := PrepareDeviceRegistration(client, session, device, now,
+        random_context, random, body[:])
+    if prepared != cast(AuthResult)AuthResult.AUTH_OK {
+        return prepared
+    }
+    response: [2048]u8
+    status: s32 = 0
+    return BearerRequest(client, session, now, "POST",
+        "/api/v1/account/devices", TextUntilNul(body[:]),
+        response[:], *status)
+}
+
+#scope_export
+#program_export
+Sync :: (client: Client, session: *Session, device: Device,
+    now: s64, random_context: *void, random: RandomNonce,
+    body: string, output: []u8, status: *s32) -> AuthResult {
+    if output.count == 0 || status == null || body.count == 0 {
+        return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
+    }
+    output[0] = cast(u8)0
+    status.* = 0
+    registered := RegisterDevice(client, session, device, now,
+        random_context, random)
+    if registered != cast(AuthResult)AuthResult.AUTH_OK {
+        return registered
+    }
+    transaction_header: [8192]u8
+    prepared := PrepareSyncHeader(client, session, device, now,
+        random_context, random, body, transaction_header[:])
+    if prepared != cast(AuthResult)AuthResult.AUTH_OK {
+        return prepared
+    }
+    extra: [1]HttpHeader
+    extra[0].name = "X-Daochi-Tx"
+    extra[0].value = TextUntilNul(transaction_header[:])
+    return BearerRequestWithHeaders(client, session, now,
+        "POST", "/api/v1/sync", body, output, status, extra[:])
+}
+
+// Shared request preparation for blocking and frame-driven transports.
+#scope_export
+PrepareDeviceRegistration :: (client: Client, session: *Session,
+    device: Device, now: s64, random_context: *void,
+    random: RandomNonce, body: []u8) -> AuthResult {
     if !Hex64(device.key_id) ||
         !Hex64(device.public_key_hex) {
         return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
@@ -91,33 +137,17 @@ RegisterDevice :: (client: Client, session: *Session,
         !SignatureHex(TextUntilNul(account_signature[:]), 4840) {
         return cast(AuthResult)AuthResult.AUTH_SIGN_FAILED
     }
-    body: [6144]u8
     if !BuildDeviceRegistrationBody(registration,
-        TextUntilNul(account_signature[:]), body[:]) {
+        TextUntilNul(account_signature[:]), body) {
         return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
     }
-    response: [2048]u8
-    status: s32 = 0
-    return BearerRequest(client, session, now, "POST",
-        "/api/v1/account/devices", TextUntilNul(body[:]),
-        response[:], *status)
+    return cast(AuthResult)AuthResult.AUTH_OK
 }
 
 #scope_export
-#program_export
-Sync :: (client: Client, session: *Session, device: Device,
+PrepareSyncHeader :: (client: Client, session: *Session, device: Device,
     now: s64, random_context: *void, random: RandomNonce,
-    body: string, output: []u8, status: *s32) -> AuthResult {
-    if output.count == 0 || status == null || body.count == 0 {
-        return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
-    }
-    output[0] = cast(u8)0
-    status.* = 0
-    registered := RegisterDevice(client, session, device, now,
-        random_context, random)
-    if registered != cast(AuthResult)AuthResult.AUTH_OK {
-        return registered
-    }
+    body: string, transaction_header: []u8) -> AuthResult {
     tx_id: [65]u8
     nonce: [65]u8
     body_hash: [65]u8
@@ -153,16 +183,11 @@ Sync :: (client: Client, session: *Session, device: Device,
         !SignatureHex(TextUntilNul(device_signature[:]), 128) {
         return cast(AuthResult)AuthResult.AUTH_SIGN_FAILED
     }
-    transaction_header: [8192]u8
     if !BuildSyncTransactionHeader(transaction,
         TextUntilNul(account_signature[:]),
         TextUntilNul(device_signature[:]),
-        transaction_header[:]) {
+        transaction_header) {
         return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
     }
-    extra: [1]HttpHeader
-    extra[0].name = "X-Daochi-Tx"
-    extra[0].value = TextUntilNul(transaction_header[:])
-    return BearerRequestWithHeaders(client, session, now,
-        "POST", "/api/v1/sync", body, output, status, extra[:])
+    return cast(AuthResult)AuthResult.AUTH_OK
 }
