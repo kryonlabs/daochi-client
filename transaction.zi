@@ -54,9 +54,11 @@ HexText :: (value: string, length: s64) -> bool {
     return true
 }
 
-WriteDecimal :: (output: []u8, cursor: *s64, value: s64) -> bool {
+WriteDecimal :: (writer: Writer, value: s64) -> Writer {
+    result := writer
     if value < 0 {
-        return false
+        result.valid = false
+        return result
     }
     digits: [20]u8
     count: s64 = 0
@@ -72,11 +74,9 @@ WriteDecimal :: (output: []u8, cursor: *s64, value: s64) -> bool {
     }
     while count > 0 {
         count -= 1
-        if !WriteByte(output, cursor, digits[count]) {
-            return false
-        }
+        result = WriteByte(result, digits[count])
     }
-    return true
+    return result
 }
 
 RegistrationValid :: (request: DeviceRegistration) -> bool {
@@ -109,22 +109,23 @@ BuildDeviceRegistrationMessage :: (request: DeviceRegistration,
     if !RegistrationValid(request) {
         return false
     }
-    cursor: s64 = 0
-    if !WriteText(output, *cursor, "daochi-device-registration-v1\n") ||
-        !WriteText(output, *cursor, request.account_id) ||
-        !WriteByte(output, *cursor, cast(u8)10) ||
-        !WriteText(output, *cursor, request.app_id) ||
-        !WriteByte(output, *cursor, cast(u8)10) ||
-        !WriteText(output, *cursor, request.device_key_id) ||
-        !WriteByte(output, *cursor, cast(u8)10) ||
-        !WriteText(output, *cursor, request.client_id) ||
-        !WriteByte(output, *cursor, cast(u8)10) ||
-        !WriteText(output, *cursor, request.public_key_hex) ||
-        !WriteByte(output, *cursor, cast(u8)10) ||
-        !WriteText(output, *cursor, request.nonce) ||
-        !WriteByte(output, *cursor, cast(u8)10) ||
-        !WriteDecimal(output, *cursor, request.expires_at) ||
-        !WriteByte(output, *cursor, cast(u8)10) {
+    writer: Writer = Writer.{output, 0, true}
+    writer = WriteText(writer, "daochi-device-registration-v1\n")
+    writer = WriteText(writer, request.account_id)
+    writer = WriteByte(writer, cast(u8)10)
+    writer = WriteText(writer, request.app_id)
+    writer = WriteByte(writer, cast(u8)10)
+    writer = WriteText(writer, request.device_key_id)
+    writer = WriteByte(writer, cast(u8)10)
+    writer = WriteText(writer, request.client_id)
+    writer = WriteByte(writer, cast(u8)10)
+    writer = WriteText(writer, request.public_key_hex)
+    writer = WriteByte(writer, cast(u8)10)
+    writer = WriteText(writer, request.nonce)
+    writer = WriteByte(writer, cast(u8)10)
+    writer = WriteDecimal(writer, request.expires_at)
+    writer = WriteByte(writer, cast(u8)10)
+    if !writer.valid {
         output[0] = cast(u8)0
         return false
     }
@@ -143,22 +144,23 @@ BuildDeviceRegistrationBody :: (request: DeviceRegistration,
         !HexText(account_signature_hex, 4840) {
         return false
     }
-    cursor: s64 = 0
-    if !WriteText(output, *cursor, "{\"app_id\":") ||
-        !AppendJsonQuoted(output, *cursor, request.app_id) ||
-        !WriteText(output, *cursor, ",\"device_key_id\":") ||
-        !AppendJsonQuoted(output, *cursor, request.device_key_id) ||
-        !WriteText(output, *cursor, ",\"client_id\":") ||
-        !AppendJsonQuoted(output, *cursor, request.client_id) ||
-        !WriteText(output, *cursor, ",\"public_key\":") ||
-        !AppendJsonQuoted(output, *cursor, request.public_key_hex) ||
-        !WriteText(output, *cursor, ",\"nonce\":") ||
-        !AppendJsonQuoted(output, *cursor, request.nonce) ||
-        !WriteText(output, *cursor, ",\"expires_at\":") ||
-        !WriteDecimal(output, *cursor, request.expires_at) ||
-        !WriteText(output, *cursor, ",\"signature\":") ||
-        !AppendJsonQuoted(output, *cursor, account_signature_hex) ||
-        !WriteByte(output, *cursor, cast(u8)125) {
+    writer: Writer = Writer.{output, 0, true}
+    writer = WriteText(writer, "{\"app_id\":")
+    writer = AppendJsonQuoted(writer, request.app_id)
+    writer = WriteText(writer, ",\"device_key_id\":")
+    writer = AppendJsonQuoted(writer, request.device_key_id)
+    writer = WriteText(writer, ",\"client_id\":")
+    writer = AppendJsonQuoted(writer, request.client_id)
+    writer = WriteText(writer, ",\"public_key\":")
+    writer = AppendJsonQuoted(writer, request.public_key_hex)
+    writer = WriteText(writer, ",\"nonce\":")
+    writer = AppendJsonQuoted(writer, request.nonce)
+    writer = WriteText(writer, ",\"expires_at\":")
+    writer = WriteDecimal(writer, request.expires_at)
+    writer = WriteText(writer, ",\"signature\":")
+    writer = AppendJsonQuoted(writer, account_signature_hex)
+    writer = WriteByte(writer, cast(u8)125)
+    if !writer.valid {
         output[0] = cast(u8)0
         return false
     }
@@ -176,22 +178,23 @@ BuildSyncTransactionMessage :: (transaction: SyncTransaction,
     if !TransactionValid(transaction) {
         return false
     }
-    cursor: s64 = 0
-    if !WriteText(output, *cursor, "daochi-tx-v1\n6\n") ||
-        !WriteText(output, *cursor, transaction.tx_id) ||
-        !WriteByte(output, *cursor, cast(u8)10) ||
-        !WriteText(output, *cursor, transaction.account_id) ||
-        !WriteByte(output, *cursor, cast(u8)10) ||
-        !WriteText(output, *cursor, transaction.app_id) ||
-        !WriteByte(output, *cursor, cast(u8)10) ||
-        !WriteText(output, *cursor, transaction.device_key_id) ||
-        !WriteText(output, *cursor, "\nPOST\n/api/v1/sync\n") ||
-        !WriteText(output, *cursor, transaction.body_sha256_hex) ||
-        !WriteByte(output, *cursor, cast(u8)10) ||
-        !WriteText(output, *cursor, transaction.nonce) ||
-        !WriteByte(output, *cursor, cast(u8)10) ||
-        !WriteDecimal(output, *cursor, transaction.expires_at) ||
-        !WriteByte(output, *cursor, cast(u8)10) {
+    writer: Writer = Writer.{output, 0, true}
+    writer = WriteText(writer, "daochi-tx-v1\n6\n")
+    writer = WriteText(writer, transaction.tx_id)
+    writer = WriteByte(writer, cast(u8)10)
+    writer = WriteText(writer, transaction.account_id)
+    writer = WriteByte(writer, cast(u8)10)
+    writer = WriteText(writer, transaction.app_id)
+    writer = WriteByte(writer, cast(u8)10)
+    writer = WriteText(writer, transaction.device_key_id)
+    writer = WriteText(writer, "\nPOST\n/api/v1/sync\n")
+    writer = WriteText(writer, transaction.body_sha256_hex)
+    writer = WriteByte(writer, cast(u8)10)
+    writer = WriteText(writer, transaction.nonce)
+    writer = WriteByte(writer, cast(u8)10)
+    writer = WriteDecimal(writer, transaction.expires_at)
+    writer = WriteByte(writer, cast(u8)10)
+    if !writer.valid {
         output[0] = cast(u8)0
         return false
     }
@@ -212,29 +215,29 @@ BuildSyncTransactionHeader :: (transaction: SyncTransaction,
         !HexText(device_signature_hex, 128) {
         return false
     }
-    cursor: s64 = 0
-    if !WriteText(output, *cursor, "{\"protocol_version\":6,\"tx_id\":") ||
-        !AppendJsonQuoted(output, *cursor, transaction.tx_id) ||
-        !WriteText(output, *cursor, ",\"account_id\":") ||
-        !AppendJsonQuoted(output, *cursor, transaction.account_id) ||
-        !WriteText(output, *cursor, ",\"app_id\":") ||
-        !AppendJsonQuoted(output, *cursor, transaction.app_id) ||
-        !WriteText(output, *cursor, ",\"device_key_id\":") ||
-        !AppendJsonQuoted(output, *cursor, transaction.device_key_id) ||
-        !WriteText(output, *cursor,
-            ",\"method\":\"POST\",\"path\":\"/api/v1/sync\",\"body_sha256\":") ||
-        !AppendJsonQuoted(output, *cursor,
-            transaction.body_sha256_hex) ||
-        !WriteText(output, *cursor, ",\"nonce\":") ||
-        !AppendJsonQuoted(output, *cursor, transaction.nonce) ||
-        !WriteText(output, *cursor, ",\"expires_at\":") ||
-        !WriteDecimal(output, *cursor, transaction.expires_at) ||
-        !WriteText(output, *cursor,
-            ",\"signature_context\":\"daochi-tx-v1\",\"signature\":") ||
-        !AppendJsonQuoted(output, *cursor, account_signature_hex) ||
-        !WriteText(output, *cursor, ",\"device_signature\":") ||
-        !AppendJsonQuoted(output, *cursor, device_signature_hex) ||
-        !WriteByte(output, *cursor, cast(u8)125) {
+    writer: Writer = Writer.{output, 0, true}
+    writer = WriteText(writer, "{\"protocol_version\":6,\"tx_id\":")
+    writer = AppendJsonQuoted(writer, transaction.tx_id)
+    writer = WriteText(writer, ",\"account_id\":")
+    writer = AppendJsonQuoted(writer, transaction.account_id)
+    writer = WriteText(writer, ",\"app_id\":")
+    writer = AppendJsonQuoted(writer, transaction.app_id)
+    writer = WriteText(writer, ",\"device_key_id\":")
+    writer = AppendJsonQuoted(writer, transaction.device_key_id)
+    writer = WriteText(writer,
+        ",\"method\":\"POST\",\"path\":\"/api/v1/sync\",\"body_sha256\":")
+    writer = AppendJsonQuoted(writer, transaction.body_sha256_hex)
+    writer = WriteText(writer, ",\"nonce\":")
+    writer = AppendJsonQuoted(writer, transaction.nonce)
+    writer = WriteText(writer, ",\"expires_at\":")
+    writer = WriteDecimal(writer, transaction.expires_at)
+    writer = WriteText(writer,
+        ",\"signature_context\":\"daochi-tx-v1\",\"signature\":")
+    writer = AppendJsonQuoted(writer, account_signature_hex)
+    writer = WriteText(writer, ",\"device_signature\":")
+    writer = AppendJsonQuoted(writer, device_signature_hex)
+    writer = WriteByte(writer, cast(u8)125)
+    if !writer.valid {
         output[0] = cast(u8)0
         return false
     }

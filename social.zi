@@ -86,11 +86,11 @@ BuildFriendRequestBody :: (target: string, output: []u8) -> bool {
     output[0] = cast(u8)0
     normalized: [80]u8
     if !NormalizeFriendTarget(target, normalized[:]) { return false }
-    cursor: s64 = 0
-    if !WriteText(output, *cursor, "{\"target\":") ||
-        !AppendJsonQuoted(output, *cursor,
-            TextUntilNul(normalized[:])) ||
-        !WriteByte(output, *cursor, cast(u8)125) {
+    writer: Writer = Writer.{output, 0, true}
+    writer = WriteText(writer, "{\"target\":")
+    writer = AppendJsonQuoted(writer, TextUntilNul(normalized[:]))
+    writer = WriteByte(writer, cast(u8)125)
+    if !writer.valid {
         output[0] = cast(u8)0
         return false
     }
@@ -102,10 +102,10 @@ HexUpper :: (digit: u8) -> u8 {
     return cast(u8)65 + digit - cast(u8)10
 }
 
-AppendQuery :: (output: []u8, cursor: *s64,
-    value: string) -> bool {
+AppendQuery :: (writer: Writer, value: string) -> Writer {
+    result := writer
     index: s64 = 0
-    while index < cast(s64)value.count {
+    while result.valid && index < cast(s64)value.count {
         byte := value[index]
         ordinary := (byte >= cast(u8)65 && byte <= cast(u8)90) ||
             (byte >= cast(u8)97 && byte <= cast(u8)122) ||
@@ -113,15 +113,15 @@ AppendQuery :: (output: []u8, cursor: *s64,
             byte == cast(u8)95 || byte == cast(u8)45 ||
             byte == cast(u8)46 || byte == cast(u8)58
         if ordinary {
-            if !WriteByte(output, cursor, byte) { return false }
-        } else if !WriteByte(output, cursor, cast(u8)37) ||
-            !WriteByte(output, cursor, HexUpper(byte / cast(u8)16)) ||
-            !WriteByte(output, cursor, HexUpper(byte % cast(u8)16)) {
-            return false
+            result = WriteByte(result, byte)
+        } else {
+            result = WriteByte(result, cast(u8)37)
+            result = WriteByte(result, HexUpper(byte / cast(u8)16))
+            result = WriteByte(result, HexUpper(byte % cast(u8)16))
         }
         index += 1
     }
-    return true
+    return result
 }
 
 #scope_export
@@ -133,13 +133,14 @@ BuildFriendStatsPath :: (app_id: string, practice: string,
     if app_id.count == 0 || practice.count == 0 || metric.count == 0 {
         return false
     }
-    cursor: s64 = 0
-    if !WriteText(output, *cursor, "/api/v1/friends/stats?app=") ||
-        !AppendQuery(output, *cursor, app_id) ||
-        !WriteText(output, *cursor, "&practice=") ||
-        !AppendQuery(output, *cursor, practice) ||
-        !WriteText(output, *cursor, "&metric=") ||
-        !AppendQuery(output, *cursor, metric) {
+    writer: Writer = Writer.{output, 0, true}
+    writer = WriteText(writer, "/api/v1/friends/stats?app=")
+    writer = AppendQuery(writer, app_id)
+    writer = WriteText(writer, "&practice=")
+    writer = AppendQuery(writer, practice)
+    writer = WriteText(writer, "&metric=")
+    writer = AppendQuery(writer, metric)
+    if !writer.valid {
         output[0] = cast(u8)0
         return false
     }
@@ -170,11 +171,13 @@ BuildFriendActionPath :: (request_id: string, action: string,
     output[0] = cast(u8)0
     if !PathSegment(request_id) ||
         !(action == "accept" || action == "decline") { return false }
-    cursor: s64 = 0
-    return WriteText(output, *cursor, "/api/v1/friends/requests/") &&
-        WriteText(output, *cursor, request_id) &&
-        WriteByte(output, *cursor, cast(u8)47) &&
-        WriteText(output, *cursor, action)
+    writer: Writer = Writer.{output, 0, true}
+    writer = WriteText(writer, "/api/v1/friends/requests/")
+    writer = WriteText(writer, request_id)
+    writer = WriteByte(writer, cast(u8)47)
+    writer = WriteText(writer, action)
+    if !writer.valid { output[0] = cast(u8)0 }
+    return writer.valid
 }
 
 #scope_export
@@ -183,9 +186,11 @@ BuildFriendPath :: (friend_id: string, output: []u8) -> bool {
     if output.count == 0 { return false }
     output[0] = cast(u8)0
     if !Hex64(friend_id) { return false }
-    cursor: s64 = 0
-    return WriteText(output, *cursor, "/api/v1/friends/") &&
-        WriteText(output, *cursor, friend_id)
+    writer: Writer = Writer.{output, 0, true}
+    writer = WriteText(writer, "/api/v1/friends/")
+    writer = WriteText(writer, friend_id)
+    if !writer.valid { output[0] = cast(u8)0 }
+    return writer.valid
 }
 
 #scope_export
@@ -197,12 +202,13 @@ BuildAliasBody :: (account_id: string, alias: string,
     if !Hex64(account_id) || alias.count == 0 || alias.count > 64 {
         return false
     }
-    cursor: s64 = 0
-    if !WriteText(output, *cursor, "{\"user_id_hash\":") ||
-        !AppendJsonQuoted(output, *cursor, account_id) ||
-        !WriteText(output, *cursor, ",\"alias\":") ||
-        !AppendJsonQuoted(output, *cursor, alias) ||
-        !WriteByte(output, *cursor, cast(u8)125) {
+    writer: Writer = Writer.{output, 0, true}
+    writer = WriteText(writer, "{\"user_id_hash\":")
+    writer = AppendJsonQuoted(writer, account_id)
+    writer = WriteText(writer, ",\"alias\":")
+    writer = AppendJsonQuoted(writer, alias)
+    writer = WriteByte(writer, cast(u8)125)
+    if !writer.valid {
         output[0] = cast(u8)0
         return false
     }

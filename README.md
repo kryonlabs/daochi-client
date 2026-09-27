@@ -35,16 +35,17 @@ module and `ReceiveEvent` to its bounded curl WebSocket module. Browser and
 Android hosts must implement those host boundaries before those builds sync.
 
 `sh tests/run.sh` checks the library using the sibling `ziran` checkout,
-including a portable `.zib` URL test. Set `ZIRAN_DIR` when that checkout is
+including portable `.zib` URL and wire tests. The wire test also checks a
+saved `.zir` to `.zib` round trip. Set `ZIRAN_DIR` when that checkout is
 elsewhere.
 
 The library does not provision keys, revoke devices, store account data, or
 merge application records. Each app owns those operations and supplies its
 payload builder, response merge, key store, and platform transport.
 
-The protocol now uses Ziran's `TextView` and bounded `TextUntilNul` instead of
-a native string-layout adapter. The URL policy and builders compile and run as
-portable `.zib`. The full client is **not yet a `.zib` bundle**: the wire
-builders still use pointer cursors outside the portable subset, and host
-capabilities still need bundle bindings. Native Linux integration is tested;
+The protocol uses Ziran's `TextView` and bounded `TextUntilNul` instead of
+a native string-layout adapter. URL policy, wire builders, and signed device
+registration message construction compile and run as portable `.zib`. The
+full HTTP client is **not yet a `.zib` bundle**: host transport, digest, and
+signer callbacks need bundle capabilities. Native Linux integration is tested;
 browser and Android transports remain application host work.

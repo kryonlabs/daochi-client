@@ -35,3 +35,18 @@ done
     "$root/tests/url_portable.zi"
 test "$("$ziran_bin" run "$work/url.zib")" = 0
 echo 'Daochi Ziran URL portable bundle passed'
+
+"$ziran_bin" bundle --root "$root/tests" \
+    --module-path "$root" --module-path "$ziran/std" \
+    --entry wire_portable:Check -o "$work/wire.zib" \
+    "$root/tests/wire_portable.zi"
+test "$("$ziran_bin" run "$work/wire.zib")" = 0
+"$ziran_bin" ir --root "$root/tests" \
+    --module-path "$root" --module-path "$ziran/std" \
+    -o "$work/wire-ir" "$root/tests/wire_portable.zi"
+"$ziran_bin" bundle --root "$work/wire-ir" \
+    --module-path "$root" --module-path "$ziran/std" \
+    --entry wire_portable:Check -o "$work/wire-saved.zib" \
+    "$work/wire-ir/wire_portable.zir"
+test "$("$ziran_bin" run "$work/wire-saved.zib")" = 0
+echo 'Daochi Ziran wire portable bundle passed'

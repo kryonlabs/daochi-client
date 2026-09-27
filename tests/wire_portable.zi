@@ -1,0 +1,37 @@
+#import "wire"
+#import "transaction"
+#import "text_buffer"
+
+#program_export
+Check :: () -> s32 {
+    account := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    path: [128]u8
+    if !BuildChallengePath(account, path[:]) ||
+        TextUntilNul(path[:]) != "/api/v1/sync/challenge?user_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+        return 1
+    }
+    body: [256]u8
+    if !BuildLoginBody(account, "c1", "pk", body[:]) ||
+        TextUntilNul(body[:]) != "{\"user_id_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"client_id\":\"c1\",\"public_key\":\"pk\"}" {
+        return 2
+    }
+    small: [8]u8
+    if BuildLoginBody(account, "c1", "pk", small[:]) ||
+        small[0] != cast(u8)0 {
+        return 3
+    }
+    request: DeviceRegistration
+    request.account_id = account
+    request.app_id = "inbe"
+    request.device_key_id = account
+    request.client_id = "c1"
+    request.public_key_hex = account
+    request.nonce = account
+    request.expires_at = 1700000000
+    message: [512]u8
+    if !BuildDeviceRegistrationMessage(request, message[:]) ||
+        TextUntilNul(message[:]) != "daochi-device-registration-v1\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\ninbe\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nc1\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n1700000000\n" {
+        return 4
+    }
+    return 0
+}

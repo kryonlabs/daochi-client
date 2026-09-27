@@ -2,29 +2,44 @@
 // hashing, HTTP transport, and the destination buffers.
 
 #scope_export
-WriteByte :: (output: []u8, cursor: *s64, byte: u8) -> bool {
-    if cursor.* < 0 || cursor.* + 1 >= output.count {
-        return false
-    }
-    output[cursor.*] = byte
-    cursor.* += 1
-    output[cursor.*] = cast(u8)0
-    return true
+Writer :: struct {
+    output: []u8
+    cursor: s64
+    valid: bool
 }
 
 #scope_export
-WriteText :: (output: []u8, cursor: *s64, value: string) -> bool {
-    if cursor.* < 0 || value.count >= output.count - cursor.* {
-        return false
+WriteByte :: (writer: Writer, byte: u8) -> Writer {
+    result := writer
+    if !result.valid || result.cursor < 0 ||
+        result.output.count < 1 ||
+        result.cursor >= result.output.count - 1 {
+        result.valid = false
+        return result
+    }
+    result.output[result.cursor] = byte
+    result.cursor += 1
+    result.output[result.cursor] = cast(u8)0
+    return result
+}
+
+#scope_export
+WriteText :: (writer: Writer, value: string) -> Writer {
+    result := writer
+    if !result.valid || result.cursor < 0 ||
+        result.cursor >= result.output.count ||
+        value.count >= result.output.count - result.cursor {
+        result.valid = false
+        return result
     }
     index: s64 = 0
     while index < cast(s64)value.count {
-        output[cursor.*] = value[index]
-        cursor.* += 1
+        result.output[result.cursor] = value[index]
+        result.cursor += 1
         index += 1
     }
-    output[cursor.*] = cast(u8)0
-    return true
+    result.output[result.cursor] = cast(u8)0
+    return result
 }
 
 HexDigit :: (byte: u8) -> bool {
@@ -56,19 +71,14 @@ HexUpper :: (value: u8) -> u8 {
 }
 
 #scope_export
-AppendJsonQuoted :: (output: []u8, cursor: *s64,
-    value: string) -> bool {
-    if !WriteByte(output, cursor, cast(u8)34) {
-        return false
-    }
+AppendJsonQuoted :: (writer: Writer, value: string) -> Writer {
+    result := WriteByte(writer, cast(u8)34)
     index: s64 = 0
-    while index < cast(s64)value.count {
+    while result.valid && index < cast(s64)value.count {
         byte := value[index]
         if byte == cast(u8)34 || byte == cast(u8)92 {
-            if !WriteByte(output, cursor, cast(u8)92) ||
-                !WriteByte(output, cursor, byte) {
-                return false
-            }
+            result = WriteByte(result, cast(u8)92)
+            result = WriteByte(result, byte)
         } else if byte == cast(u8)8 || byte == cast(u8)12 ||
             byte == cast(u8)10 || byte == cast(u8)13 ||
             byte == cast(u8)9 {
@@ -85,25 +95,21 @@ AppendJsonQuoted :: (output: []u8, cursor: *s64,
             if byte == cast(u8)9 {
                 escape = cast(u8)116
             }
-            if !WriteByte(output, cursor, cast(u8)92) ||
-                !WriteByte(output, cursor, escape) {
-                return false
-            }
+            result = WriteByte(result, cast(u8)92)
+            result = WriteByte(result, escape)
         } else if byte < cast(u8)32 {
-            if !WriteByte(output, cursor, cast(u8)92) ||
-                !WriteByte(output, cursor, cast(u8)117) ||
-                !WriteByte(output, cursor, cast(u8)48) ||
-                !WriteByte(output, cursor, cast(u8)48) ||
-                !WriteByte(output, cursor, HexUpper(byte / cast(u8)16)) ||
-                !WriteByte(output, cursor, HexUpper(byte % cast(u8)16)) {
-                return false
-            }
-        } else if !WriteByte(output, cursor, byte) {
-            return false
+            result = WriteByte(result, cast(u8)92)
+            result = WriteByte(result, cast(u8)117)
+            result = WriteByte(result, cast(u8)48)
+            result = WriteByte(result, cast(u8)48)
+            result = WriteByte(result, HexUpper(byte / cast(u8)16))
+            result = WriteByte(result, HexUpper(byte % cast(u8)16))
+        } else {
+            result = WriteByte(result, byte)
         }
         index += 1
     }
-    return WriteByte(output, cursor, cast(u8)34)
+    return WriteByte(result, cast(u8)34)
 }
 
 #scope_export
@@ -116,10 +122,10 @@ BuildChallengePath :: (account_id: string, output: []u8) -> bool {
     if !Hex64(account_id) {
         return false
     }
-    cursor: s64 = 0
-    if !WriteText(output, *cursor,
-        "/api/v1/sync/challenge?user_id=") ||
-        !WriteText(output, *cursor, account_id) {
+    writer: Writer = Writer.{output, 0, true}
+    writer = WriteText(writer, "/api/v1/sync/challenge?user_id=")
+    writer = WriteText(writer, account_id)
+    if !writer.valid {
         output[0] = cast(u8)0
         return false
     }
@@ -138,14 +144,15 @@ BuildLoginBody :: (account_id: string, client_id: string,
         public_key.count == 0 {
         return false
     }
-    cursor: s64 = 0
-    if !WriteText(output, *cursor, "{\"user_id_hash\":") ||
-        !AppendJsonQuoted(output, *cursor, account_id) ||
-        !WriteText(output, *cursor, ",\"client_id\":") ||
-        !AppendJsonQuoted(output, *cursor, client_id) ||
-        !WriteText(output, *cursor, ",\"public_key\":") ||
-        !AppendJsonQuoted(output, *cursor, public_key) ||
-        !WriteByte(output, *cursor, cast(u8)125) {
+    writer: Writer = Writer.{output, 0, true}
+    writer = WriteText(writer, "{\"user_id_hash\":")
+    writer = AppendJsonQuoted(writer, account_id)
+    writer = WriteText(writer, ",\"client_id\":")
+    writer = AppendJsonQuoted(writer, client_id)
+    writer = WriteText(writer, ",\"public_key\":")
+    writer = AppendJsonQuoted(writer, public_key)
+    writer = WriteByte(writer, cast(u8)125)
+    if !writer.valid {
         output[0] = cast(u8)0
         return false
     }
@@ -165,13 +172,13 @@ BuildLoginMessageHash :: (body_sha256_hex: string,
     if !Hex64(body_sha256_hex) || !Hex64(nonce_hex) {
         return false
     }
-    cursor: s64 = 0
-    if !WriteText(output, *cursor,
-        "daochi-sync-v1\nPOST\n/api/v1/sync/login\n") ||
-        !WriteText(output, *cursor, body_sha256_hex) ||
-        !WriteByte(output, *cursor, cast(u8)10) ||
-        !WriteText(output, *cursor, nonce_hex) ||
-        !WriteByte(output, *cursor, cast(u8)10) {
+    writer: Writer = Writer.{output, 0, true}
+    writer = WriteText(writer, "daochi-sync-v1\nPOST\n/api/v1/sync/login\n")
+    writer = WriteText(writer, body_sha256_hex)
+    writer = WriteByte(writer, cast(u8)10)
+    writer = WriteText(writer, nonce_hex)
+    writer = WriteByte(writer, cast(u8)10)
+    if !writer.valid {
         output[0] = cast(u8)0
         return false
     }
@@ -187,13 +194,13 @@ BuildDeleteMessageHash :: (body_sha256_hex: string,
     if !Hex64(body_sha256_hex) || !Hex64(nonce_hex) {
         return false
     }
-    cursor: s64 = 0
-    if !WriteText(output, *cursor,
-        "daochi-sync-v1\nPOST\n/api/v1/account/delete\n") ||
-        !WriteText(output, *cursor, body_sha256_hex) ||
-        !WriteByte(output, *cursor, cast(u8)10) ||
-        !WriteText(output, *cursor, nonce_hex) ||
-        !WriteByte(output, *cursor, cast(u8)10) {
+    writer: Writer = Writer.{output, 0, true}
+    writer = WriteText(writer, "daochi-sync-v1\nPOST\n/api/v1/account/delete\n")
+    writer = WriteText(writer, body_sha256_hex)
+    writer = WriteByte(writer, cast(u8)10)
+    writer = WriteText(writer, nonce_hex)
+    writer = WriteByte(writer, cast(u8)10)
+    if !writer.valid {
         output[0] = cast(u8)0
         return false
     }

@@ -14,12 +14,13 @@ BuildDeleteBody :: (account_id: string, public_key: string,
     if output.count == 0 { return false }
     output[0] = cast(u8)0
     if !Hex64(account_id) || public_key.count == 0 { return false }
-    cursor: s64 = 0
-    if !WriteText(output, *cursor, "{\"user_id_hash\":") ||
-        !AppendJsonQuoted(output, *cursor, account_id) ||
-        !WriteText(output, *cursor, ",\"public_key\":") ||
-        !AppendJsonQuoted(output, *cursor, public_key) ||
-        !WriteByte(output, *cursor, cast(u8)125) {
+    writer: Writer = Writer.{output, 0, true}
+    writer = WriteText(writer, "{\"user_id_hash\":")
+    writer = AppendJsonQuoted(writer, account_id)
+    writer = WriteText(writer, ",\"public_key\":")
+    writer = AppendJsonQuoted(writer, public_key)
+    writer = WriteByte(writer, cast(u8)125)
+    if !writer.valid {
         output[0] = cast(u8)0
         return false
     }
